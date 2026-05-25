@@ -326,7 +326,14 @@ async def mark_auto_reply_result(
     dry_run: bool,
     error: str = "",
 ) -> None:
-    sent_statuses = {"sent", "submitted_unconfirmed"}
+    sent_statuses = {
+        "sent",
+        "submitted_unconfirmed",
+        "sent_preapplication_pending",
+        "sent_preapplication_failed",
+        "preapplication_sent",
+        "preapplication_submitted_unconfirmed",
+    }
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """

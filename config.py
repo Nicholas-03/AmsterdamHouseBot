@@ -94,5 +94,47 @@ FUNDA_BROWSER_TIMEOUT_SECONDS = _parse_non_negative_int(
     45,
 )
 
+ROOFZ_AUTO_REPLY_ENABLED = _parse_bool(os.getenv("ROOFZ_AUTO_REPLY_ENABLED"), False)
+ROOFZ_REPLY_DRY_RUN = _parse_bool(os.getenv("ROOFZ_REPLY_DRY_RUN"), KAMERNET_REPLY_DRY_RUN)
+ROOFZ_EMAIL = _getenv_fallback("ROOFZ_EMAIL", KAMERNET_EMAIL).strip()
+ROOFZ_FIRST_NAME = os.getenv("ROOFZ_FIRST_NAME", FUNDA_FIRST_NAME).strip()
+ROOFZ_LAST_NAME = os.getenv("ROOFZ_LAST_NAME", FUNDA_LAST_NAME).strip()
+ROOFZ_PHONE_NUMBER = _getenv_fallback("ROOFZ_PHONE_NUMBER", FUNDA_PHONE_NUMBER).strip()
+ROOFZ_REPLY_MESSAGE = _load_reply_message("ROOFZ", FUNDA_REPLY_MESSAGE or KAMERNET_REPLY_MESSAGE)
+ROOFZ_REPLY_MAX_PER_SCAN = _parse_non_negative_int(os.getenv("ROOFZ_REPLY_MAX_PER_SCAN"), 0)
+ROOFZ_CONTACT_API_URL = os.getenv(
+    "ROOFZ_CONTACT_API_URL",
+    "https://www.roofz.eu/api/ms/subscription/candidate",
+).strip()
+ROOFZ_BROWSER_HEADLESS = _parse_bool(os.getenv("ROOFZ_BROWSER_HEADLESS"), True)
+ROOFZ_BROWSER_TIMEOUT_SECONDS = _parse_non_negative_int(
+    os.getenv("ROOFZ_BROWSER_TIMEOUT_SECONDS"),
+    45,
+)
+ROOFZ_PREAPPLICATION_ENABLED = _parse_bool(os.getenv("ROOFZ_PREAPPLICATION_ENABLED"), False)
+ROOFZ_PREAPPLICATION_POLL_SECONDS = _parse_non_negative_int(
+    os.getenv("ROOFZ_PREAPPLICATION_POLL_SECONDS"),
+    180,
+)
+ROOFZ_PREAPPLICATION_POLL_INTERVAL_SECONDS = _parse_non_negative_int(
+    os.getenv("ROOFZ_PREAPPLICATION_POLL_INTERVAL_SECONDS"),
+    15,
+)
+ROOFZ_GMAIL_CREDENTIALS_PATH = os.getenv("ROOFZ_GMAIL_CREDENTIALS_PATH", "gmail_credentials.json")
+ROOFZ_GMAIL_TOKEN_PATH = os.getenv("ROOFZ_GMAIL_TOKEN_PATH", "gmail_token.json")
+ROOFZ_GMAIL_SENDER = os.getenv("ROOFZ_GMAIL_SENDER", "living@rockfieldrealestate.com").strip()
+ROOFZ_GMAIL_SUBJECT_PREFIX = os.getenv(
+    "ROOFZ_GMAIL_SUBJECT_PREFIX",
+    "Start your pre-application",
+).strip()
+ROOFZ_EXPECTED_STAY_DURATION = os.getenv("ROOFZ_EXPECTED_STAY_DURATION", "1 year").strip()
+ROOFZ_EXPECTED_MOVE_DATE = os.getenv("ROOFZ_EXPECTED_MOVE_DATE", "01/07/2026").strip()
+ROOFZ_GENDER = os.getenv("ROOFZ_GENDER", "Male").strip()
+ROOFZ_AGE = os.getenv("ROOFZ_AGE", "23").strip()
+ROOFZ_OCCUPATION = os.getenv("ROOFZ_OCCUPATION", "Working student").strip()
+ROOFZ_LANGUAGES = os.getenv("ROOFZ_LANGUAGES", "Dutch, English, Italian").strip()
+ROOFZ_PETS = os.getenv("ROOFZ_PETS", "No").strip()
+ROOFZ_PEOPLE_MOVING = os.getenv("ROOFZ_PEOPLE_MOVING", "1").strip()
+
 if not TELEGRAM_TOKEN:
     sys.exit("ERRORE: TELEGRAM_TOKEN non trovato. Copia .env.example in .env e inserisci il token.")

@@ -96,9 +96,37 @@ class RoofzScraper(BaseScraper):
         rows = await page.evaluate(
             """
             () => {
+                const properties = {};
+                const seenObjects = new Set();
+                const walk = (value) => {
+                    if (!value || typeof value !== "object" || seenObjects.has(value)) return;
+                    seenObjects.add(value);
+                    if (
+                        Number.isInteger(value.id)
+                        && typeof value.slug === "string"
+                        && typeof value.title === "string"
+                        && value.project
+                    ) {
+                        properties[value.slug] = {
+                            propertyId: String(value.id),
+                            stage: value.stage || "",
+                            status: value.status?.code || "",
+                        };
+                    }
+                    if (Array.isArray(value)) {
+                        value.forEach(walk);
+                    } else {
+                        Object.values(value).forEach(walk);
+                    }
+                };
+                walk(window.__NUXT__);
+
                 const links = [...document.querySelectorAll("a[href]")];
                 return links.map((link) => {
                     const href = link.href;
+                    const path = new URL(href, window.location.href).pathname.replace(/\\/$/, "");
+                    const slug = path.split("/").pop() || "";
+                    const property = properties[slug] || {};
                     const container =
                         link.closest("article, li, [class*='card'], [class*='offer'], [class*='property']")
                         || link.parentElement;
@@ -107,6 +135,9 @@ class RoofzScraper(BaseScraper):
                         linkText: link.textContent || "",
                         text: container ? container.textContent || "" : link.textContent || "",
                         image: container?.querySelector("img")?.src || null,
+                        propertyId: property.propertyId || "",
+                        stage: property.stage || "",
+                        status: property.status || "",
                     };
                 });
             }
@@ -160,6 +191,11 @@ class RoofzScraper(BaseScraper):
             price_eur=price_eur,
             bedrooms=bedrooms,
             size_m2_value=size_value,
+            reply_data={
+                "property_id": _clean_text(row.get("propertyId") or ""),
+                "stage": _clean_text(row.get("stage") or ""),
+                "status": _clean_text(row.get("status") or ""),
+            },
         )
 
 

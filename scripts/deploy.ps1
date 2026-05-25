@@ -37,7 +37,10 @@ function Copy-FilteredProject {
         "kamernet_reply_message.txt",
         "kamernet_storage_state.json",
         "funda_reply_message.txt",
-        "funda_storage_state.json"
+        "funda_storage_state.json",
+        "roofz_reply_message.txt",
+        "gmail_credentials.json",
+        "gmail_token.json"
     )
     $excludedExtensions = @(".db", ".sqlite3")
 

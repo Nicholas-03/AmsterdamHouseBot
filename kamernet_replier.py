@@ -19,7 +19,14 @@ from scrapers.base import Listing
 
 logger = logging.getLogger(__name__)
 
-KAMERNET_REPLY_SENT_STATUSES = {"sent", "submitted_unconfirmed"}
+KAMERNET_REPLY_SENT_STATUSES = {
+    "sent",
+    "submitted_unconfirmed",
+    "sent_preapplication_pending",
+    "sent_preapplication_failed",
+    "preapplication_sent",
+    "preapplication_submitted_unconfirmed",
+}
 
 _CONTACT_BUTTON_RE = re.compile(r"\b(contact landlord|respond|apply|reageer)\b", re.I)
 _LOGIN_LINK_RE = re.compile(r"^log in$", re.I)

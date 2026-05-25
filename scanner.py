@@ -12,6 +12,7 @@ from kamernet_replier import (
     KamernetReplySettings,
     should_skip_existing_reply,
 )
+from roofz_replier import RoofzReplier, RoofzReplyResult, RoofzReplySettings
 from scrapers.funda import FundaScraper
 from scrapers.huurwoningen import HuurwoningenScraper
 from scrapers.kamernet import KamernetScraper
@@ -37,11 +38,15 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
     kamernet_reply_settings_error = kamernet_reply_settings.ready_error()
     funda_reply_settings = FundaReplySettings.from_config()
     funda_reply_settings_error = funda_reply_settings.ready_error()
+    roofz_reply_settings = RoofzReplySettings.from_config()
+    roofz_reply_settings_error = roofz_reply_settings.ready_error()
     if user_filters.get("auto_reply_enabled"):
         if kamernet_reply_settings.enabled and kamernet_reply_settings_error:
             logger.warning("Kamernet auto-reply is unavailable for this scan: %s", kamernet_reply_settings_error)
         if funda_reply_settings.enabled and funda_reply_settings_error:
             logger.warning("Funda auto-reply is unavailable for this scan: %s", funda_reply_settings_error)
+        if roofz_reply_settings.enabled and roofz_reply_settings_error:
+            logger.warning("Roofz auto-reply is unavailable for this scan: %s", roofz_reply_settings_error)
 
     scrapers = [
         ParariusScraper(
@@ -81,6 +86,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
     reply_attempts = {
         KamernetScraper.SOURCE: 0,
         FundaScraper.SOURCE: 0,
+        RoofzScraper.SOURCE: 0,
     }
     for scraper in scrapers:
         try:
@@ -127,6 +133,19 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                         )
                         if attempted:
                             reply_attempts[FundaScraper.SOURCE] += 1
+                    elif listing.source == RoofzScraper.SOURCE:
+                        attempted = await _maybe_auto_reply_to_listing(
+                            chat_id,
+                            listing,
+                            roofz_reply_settings,
+                            roofz_reply_settings_error,
+                            reply_attempts[RoofzScraper.SOURCE],
+                            RoofzReplier,
+                            RoofzReplyResult,
+                            "Roofz",
+                        )
+                        if attempted:
+                            reply_attempts[RoofzScraper.SOURCE] += 1
                 new_count += 1
                 new_from_scraper += 1
             logger.info(

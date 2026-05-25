@@ -14,6 +14,7 @@ import config
 import db
 from funda_replier import FundaReplySettings
 from kamernet_replier import KamernetReplySettings
+from roofz_replier import RoofzReplySettings
 from scanner import run_scan_for_user
 from scrapers.kamernet import (
     KAMERNET_PROPERTY_TYPE_LABELS,
@@ -486,7 +487,7 @@ async def _send_help(update: Update) -> None:
         "/help - show this help message\n"
         "/search - set Kamernet property types, rent, bedrooms, and size filters\n"
         "/filters - show active filters\n"
-        "/autoreply on|off|status - control Kamernet/Funda auto-replies\n"
+        "/autoreply on|off|status - control Kamernet/Funda/Roofz auto-replies\n"
         "/test - scan now\n"
         "/pause - pause notifications\n"
         "/resume - resume notifications\n"
@@ -548,6 +549,7 @@ def _auto_reply_source_status() -> list[tuple[str, str | None]]:
     return [
         ("Kamernet", KamernetReplySettings.from_config().ready_error()),
         ("Funda", FundaReplySettings.from_config().ready_error()),
+        ("Roofz", RoofzReplySettings.from_config().ready_error()),
     ]
 
 
