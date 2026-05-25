@@ -38,6 +38,7 @@ def _settings(**overrides) -> RoofzReplySettings:
         "birth_date": "01-01-2003",
         "rent_together": False,
         "current_living_situation": "Single without children",
+        "work_situation": "Student",
         "monthly_income": "1000",
         "annual_income": "12000",
         "savings": "100000",
@@ -80,6 +81,12 @@ class RoofzReplySettingsTests(unittest.TestCase):
         self.assertEqual(
             _settings(preapplication_enabled=True, birth_date="").ready_error(),
             "ROOFZ_BIRTH_DATE is missing.",
+        )
+
+    def test_preapplication_ready_error_requires_monthly_income_when_enabled(self):
+        self.assertEqual(
+            _settings(preapplication_enabled=True, monthly_income="").ready_error(),
+            "ROOFZ_MONTHLY_INCOME is missing.",
         )
 
     def test_build_contact_payload_matches_roofz_api_shape(self):

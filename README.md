@@ -126,12 +126,14 @@ Roofz auto-reply variables:
 - `ROOFZ_MAILTM_ADDRESS`: mail.tm inbox address where forwarded Roofz pre-application emails arrive
 - `ROOFZ_MAILTM_PASSWORD`: mail.tm password for the official mail.tm API
 - `ROOFZ_MAILTM_FORWARDER_ADDRESS`: optional, defaults to `ROOFZ_EMAIL`; use this when Gmail forwards messages into mail.tm
-- `ROOFZ_PREAPPLICATION_ENABLED`: optional, set to `1` to poll mail.tm for unread Roofz pre-application links after the first contact request
+- `ROOFZ_PREAPPLICATION_ENABLED`: optional, set to `1` to poll mail.tm for Roofz pre-application links, complete the OSRE form, and check for a confirmation email after the first contact request
 - `ROOFZ_BIRTH_DATE`: required when pre-applications are enabled; use `DD-MM-YYYY`
 - `ROOFZ_INITIALS`: optional, defaults to `N.G.`
 - `ROOFZ_RENT_TOGETHER`: optional, defaults to `0`
 - `ROOFZ_CURRENT_LIVING_SITUATION`: optional, defaults to `Single without children`
-- `ROOFZ_MONTHLY_INCOME`, `ROOFZ_ANNUAL_INCOME`, `ROOFZ_SAVINGS`: optional values used if the OSRE pre-application asks income or savings questions
+- `ROOFZ_WORK_SITUATION`: optional, defaults to `Student`
+- `ROOFZ_MONTHLY_INCOME`: required when pre-applications are enabled; gross monthly income for OSRE work/income questions
+- `ROOFZ_ANNUAL_INCOME`, `ROOFZ_SAVINGS`: optional values used if the OSRE pre-application asks annual income or savings questions
 
 ### 5. Start the bot
 
@@ -183,6 +185,8 @@ After that, the scheduled scanner will keep running in the background while the 
 ## Auto-Reply
 
 Auto-reply needs both server setup and a Telegram toggle. Each source has its own server-side flag, and the user must send `/autoreply on`. When enabled, it only runs after a new listing has already matched your filters and the Telegram notification has been sent. It records attempts in SQLite so the same listing is not answered twice, even if multiple Telegram users match it.
+
+Keep tokens, passwords, personal form data, and reply messages in `.env`. Do not commit real `.env` files, saved browser sessions, local databases, or reply-message text files. For VPS deployment, prefer inline `KAMERNET_REPLY_MESSAGE`, `FUNDA_REPLY_MESSAGE`, and `ROOFZ_REPLY_MESSAGE` values in `.env`; local `*_REPLY_MESSAGE_FILE` paths are not uploaded by the deploy script.
 
 Keep dry-run enabled for the first real test:
 
@@ -244,7 +248,7 @@ Roofz replies use the same contact API used by the listing page. Run a one-listi
 python scripts/test_roofz_reply.py --url "https://www.roofz.eu/huur/woningen/jan-van-galenstraat-502"
 ```
 
-To allow a live Roofz send, set `ROOFZ_REPLY_DRY_RUN=0` and pass `--live` for one listing. The contact request should use your normal Roofz email in `ROOFZ_EMAIL`. Roofz pre-applications use the official mail.tm API only to read the forwarded follow-up emails. Configure the mail.tm inbox and, when pre-applications are enabled, your `ROOFZ_BIRTH_DATE`:
+To allow a live Roofz send, set `ROOFZ_REPLY_DRY_RUN=0` and pass `--live` for one listing. The contact request should use your normal Roofz email in `ROOFZ_EMAIL`. Roofz pre-applications use the official mail.tm API to read forwarded follow-up emails, open the OSRE application link, fill the form, submit it, and then wait for a confirmation email. Configure the mail.tm inbox and the required OSRE answers:
 
 ```env
 ROOFZ_EMAIL=you@gmail.com
@@ -253,6 +257,8 @@ ROOFZ_MAILTM_PASSWORD=replace-with-mailtm-password
 ROOFZ_MAILTM_FORWARDER_ADDRESS=you@gmail.com
 ROOFZ_PREAPPLICATION_ENABLED=1
 ROOFZ_BIRTH_DATE=DD-MM-YYYY
+ROOFZ_WORK_SITUATION=Student
+ROOFZ_MONTHLY_INCOME=800
 ```
 
 Then verify the mailbox:

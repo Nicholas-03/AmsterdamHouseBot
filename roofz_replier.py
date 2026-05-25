@@ -42,6 +42,7 @@ class RoofzReplySettings:
     birth_date: str
     rent_together: bool
     current_living_situation: str
+    work_situation: str
     monthly_income: str
     annual_income: str
     savings: str
@@ -78,6 +79,7 @@ class RoofzReplySettings:
             birth_date=config.ROOFZ_BIRTH_DATE,
             rent_together=config.ROOFZ_RENT_TOGETHER,
             current_living_situation=config.ROOFZ_CURRENT_LIVING_SITUATION,
+            work_situation=config.ROOFZ_WORK_SITUATION,
             monthly_income=config.ROOFZ_MONTHLY_INCOME,
             annual_income=config.ROOFZ_ANNUAL_INCOME,
             savings=config.ROOFZ_SAVINGS,
@@ -109,6 +111,8 @@ class RoofzReplySettings:
         if self.preapplication_enabled:
             if not self.birth_date:
                 return "ROOFZ_BIRTH_DATE is missing."
+            if not self.monthly_income:
+                return "ROOFZ_MONTHLY_INCOME is missing."
             return self.mailtm.ready_error()
         return None
 
@@ -247,6 +251,11 @@ class RoofzReplier:
                         re.compile(r"(send|submit|verzend|verstuur|indienen)", re.I),
                     )
                     if final_button:
+                        if await final_button.is_disabled():
+                            return RoofzReplyResult(
+                                "preapplication_validation_failed",
+                                "The final submit button stayed disabled after filling known fields.",
+                            )
                         if self.settings.dry_run:
                             return RoofzReplyResult(
                                 "preapplication_dry_run_ready",
@@ -345,14 +354,14 @@ async def _fill_preapplication_form(page, settings: RoofzReplySettings) -> None:
         "people": settings.people_moving,
         "mensen": settings.people_moving,
         "living situation": settings.current_living_situation,
-        "work situation": settings.occupation,
+        "work situation": settings.work_situation,
         "monthly salary": settings.monthly_income,
         "monthly income": settings.monthly_income,
         "annual income": settings.annual_income,
         "savings": settings.savings,
         "equity": settings.savings,
     }
-    controls = page.locator("input:not([type='hidden']), textarea, select")
+    controls = page.locator("input:not([type='hidden']), textarea, select, mat-select")
     count = await controls.count()
     for index in range(count):
         control = controls.nth(index)
@@ -362,11 +371,15 @@ async def _fill_preapplication_form(page, settings: RoofzReplySettings) -> None:
                 continue
             label_text = await _control_label_text(control)
             value = _value_for_label(label_text, values)
+            if not value and control_type == "tel":
+                value = settings.phone_number
             if not value:
                 continue
             tag_name = (await control.evaluate("el => el.tagName")).casefold()
             if tag_name == "select":
                 await _select_best_option(control, value)
+            elif tag_name == "mat-select":
+                await _select_material_option(page, control, value)
             else:
                 await control.fill(value)
         except Exception:
@@ -410,6 +423,9 @@ async def _control_label_text(control) -> str:
             const bits = [
                 el.getAttribute("aria-label"),
                 el.getAttribute("placeholder"),
+                el.getAttribute("data-placeholder"),
+                el.getAttribute("formcontrolname"),
+                el.getAttribute("ng-reflect-name"),
                 el.name,
                 el.id,
             ];
@@ -418,7 +434,7 @@ async def _control_label_text(control) -> str:
                 const label = document.querySelector(`label[for="${CSS.escape(id)}"]`);
                 if (label) bits.push(label.textContent);
             }
-            const wrapper = el.closest("label, .q-field, .input-field, .form-group, .field");
+            const wrapper = el.closest("label, mat-form-field, .mat-form-field, .q-field, .input-field, .field");
             if (wrapper) bits.push(wrapper.textContent);
             return bits.filter(Boolean).join(" ");
         }
@@ -506,6 +522,21 @@ async def _select_best_option(control, value: str) -> None:
         if normalized_value in text or text in normalized_value:
             await control.select_option(option["value"])
             return
+
+
+async def _select_material_option(page, control, value: str) -> None:
+    await control.click()
+    option = page.get_by_role("option", name=re.compile(rf"^{re.escape(value)}$", re.I))
+    try:
+        if await option.count():
+            await option.first.click()
+            return
+    except Exception:
+        pass
+
+    fallback = page.locator("mat-option, [role='option']").filter(has_text=re.compile(re.escape(value), re.I))
+    if await fallback.count():
+        await fallback.first.click()
 
 
 async def _first_button(page, pattern: re.Pattern):
