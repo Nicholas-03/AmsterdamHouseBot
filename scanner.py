@@ -21,6 +21,13 @@ from scrapers.roofz import RoofzScraper
 
 logger = logging.getLogger(__name__)
 
+_AUTO_REPLY_WARNING_STATUSES = {
+    "sent_preapplication_pending",
+    "sent_preapplication_failed",
+    "preapplication_confirmation_missing",
+    "preapplication_validation_failed",
+}
+
 
 _FILTER_MATCH_KEYS = (
     "city",
@@ -143,6 +150,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                             RoofzReplier,
                             RoofzReplyResult,
                             "Roofz",
+                            bot,
                         )
                         if attempted:
                             reply_attempts[RoofzScraper.SOURCE] += 1
@@ -170,6 +178,7 @@ async def _maybe_auto_reply_to_listing(
     replier_cls,
     result_cls,
     source_label: str,
+    bot: Bot | None = None,
 ) -> bool:
     if not settings.enabled:
         return False
@@ -226,6 +235,16 @@ async def _maybe_auto_reply_to_listing(
         result.status,
         result.detail,
     )
+    if bot and result.status in _AUTO_REPLY_WARNING_STATUSES:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"Warning: {source_label} auto-reply needs attention for {listing.title}.\n"
+                f"Status: {result.status}\n"
+                f"Detail: {result.detail}"
+            ),
+            disable_web_page_preview=True,
+        )
     return True
 
 

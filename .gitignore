@@ -30,8 +30,6 @@ funda_storage_state.json
 kamernet_reply_message.txt
 funda_reply_message.txt
 roofz_reply_message.txt
-gmail_credentials.json
-gmail_token.json
 
 # Local verification artifacts
 output/

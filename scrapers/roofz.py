@@ -170,7 +170,7 @@ class RoofzScraper(BaseScraper):
         if not _looks_like_listing(text, href):
             return None
 
-        title = _extract_title(text) or href.rstrip("/").split("/")[-1] or "Roofz listing"
+        title = _normalize_title(_extract_title(text) or href.rstrip("/").split("/")[-1] or "Roofz listing")
         if title.lower().startswith("from:"):
             title = href.rstrip("/").split("/")[-1].replace("-", " ").title()
         listing_id = _listing_id(href, title)
@@ -223,6 +223,14 @@ def _extract_title(text: str) -> str | None:
                 return tail.split(" Rent price:", 1)[0].split("€", 1)[0].strip(" -")
     before_price = re.split(r"€|EUR|Rent price:", text, maxsplit=1, flags=re.I)[0].strip()
     return before_price[:120] if before_price else None
+
+
+def _normalize_title(title: str) -> str:
+    title = _clean_text(title)
+    postcode_match = re.match(r"^(.*?\d+(?:\s*[A-Za-z])?(?:-\d+)?)\s*\d{4}\s?[A-Z]{2}\b", title)
+    if postcode_match:
+        return _clean_text(postcode_match.group(1))
+    return title
 
 
 def _extract_address(text: str, city: str) -> str:

@@ -96,6 +96,9 @@ FUNDA_BROWSER_TIMEOUT_SECONDS = _parse_non_negative_int(
 
 ROOFZ_AUTO_REPLY_ENABLED = _parse_bool(os.getenv("ROOFZ_AUTO_REPLY_ENABLED"), False)
 ROOFZ_REPLY_DRY_RUN = _parse_bool(os.getenv("ROOFZ_REPLY_DRY_RUN"), KAMERNET_REPLY_DRY_RUN)
+ROOFZ_MAILTM_API_BASE = os.getenv("ROOFZ_MAILTM_API_BASE", "https://api.mail.tm").rstrip("/")
+ROOFZ_MAILTM_ADDRESS = os.getenv("ROOFZ_MAILTM_ADDRESS", "").strip()
+ROOFZ_MAILTM_PASSWORD = os.getenv("ROOFZ_MAILTM_PASSWORD", "")
 ROOFZ_EMAIL = _getenv_fallback("ROOFZ_EMAIL", KAMERNET_EMAIL).strip()
 ROOFZ_FIRST_NAME = os.getenv("ROOFZ_FIRST_NAME", FUNDA_FIRST_NAME).strip()
 ROOFZ_LAST_NAME = os.getenv("ROOFZ_LAST_NAME", FUNDA_LAST_NAME).strip()
@@ -120,13 +123,34 @@ ROOFZ_PREAPPLICATION_POLL_INTERVAL_SECONDS = _parse_non_negative_int(
     os.getenv("ROOFZ_PREAPPLICATION_POLL_INTERVAL_SECONDS"),
     15,
 )
-ROOFZ_GMAIL_CREDENTIALS_PATH = os.getenv("ROOFZ_GMAIL_CREDENTIALS_PATH", "gmail_credentials.json")
-ROOFZ_GMAIL_TOKEN_PATH = os.getenv("ROOFZ_GMAIL_TOKEN_PATH", "gmail_token.json")
-ROOFZ_GMAIL_SENDER = os.getenv("ROOFZ_GMAIL_SENDER", "living@rockfieldrealestate.com").strip()
-ROOFZ_GMAIL_SUBJECT_PREFIX = os.getenv(
-    "ROOFZ_GMAIL_SUBJECT_PREFIX",
+ROOFZ_MAILTM_PREAPPLICATION_SENDER = os.getenv(
+    "ROOFZ_MAILTM_PREAPPLICATION_SENDER",
+    "living@rockfieldrealestate.com",
+).strip()
+ROOFZ_MAILTM_FORWARDER_ADDRESS = os.getenv("ROOFZ_MAILTM_FORWARDER_ADDRESS", ROOFZ_EMAIL).strip()
+ROOFZ_MAILTM_PREAPPLICATION_SUBJECT_PREFIX = os.getenv(
+    "ROOFZ_MAILTM_PREAPPLICATION_SUBJECT_PREFIX",
     "Start your pre-application",
 ).strip()
+ROOFZ_MAILTM_CONFIRMATION_SENDER = os.getenv(
+    "ROOFZ_MAILTM_CONFIRMATION_SENDER",
+    ROOFZ_MAILTM_PREAPPLICATION_SENDER,
+).strip()
+ROOFZ_MAILTM_CONFIRMATION_SUBJECT_PATTERNS = tuple(
+    item.strip()
+    for item in os.getenv(
+        "ROOFZ_MAILTM_CONFIRMATION_SUBJECT_PATTERNS",
+        "confirmation,confirmed,received,bevestiging,ontvangen",
+    ).split(",")
+    if item.strip()
+)
+ROOFZ_INITIALS = os.getenv("ROOFZ_INITIALS", "N.G.").strip()
+ROOFZ_BIRTH_DATE = os.getenv("ROOFZ_BIRTH_DATE", "").strip()
+ROOFZ_RENT_TOGETHER = _parse_bool(os.getenv("ROOFZ_RENT_TOGETHER"), False)
+ROOFZ_CURRENT_LIVING_SITUATION = os.getenv("ROOFZ_CURRENT_LIVING_SITUATION", "Single without children").strip()
+ROOFZ_MONTHLY_INCOME = os.getenv("ROOFZ_MONTHLY_INCOME", "").strip()
+ROOFZ_ANNUAL_INCOME = os.getenv("ROOFZ_ANNUAL_INCOME", "").strip()
+ROOFZ_SAVINGS = os.getenv("ROOFZ_SAVINGS", "").strip()
 ROOFZ_EXPECTED_STAY_DURATION = os.getenv("ROOFZ_EXPECTED_STAY_DURATION", "1 year").strip()
 ROOFZ_EXPECTED_MOVE_DATE = os.getenv("ROOFZ_EXPECTED_MOVE_DATE", "01/07/2026").strip()
 ROOFZ_GENDER = os.getenv("ROOFZ_GENDER", "Male").strip()

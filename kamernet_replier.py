@@ -24,6 +24,8 @@ KAMERNET_REPLY_SENT_STATUSES = {
     "submitted_unconfirmed",
     "sent_preapplication_pending",
     "sent_preapplication_failed",
+    "preapplication_confirmed",
+    "preapplication_confirmation_missing",
     "preapplication_sent",
     "preapplication_submitted_unconfirmed",
 }

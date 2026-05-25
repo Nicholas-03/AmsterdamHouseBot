@@ -1,10 +1,9 @@
 import os
 import unittest
-from pathlib import Path
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-from gmail_preapplication import GmailPreApplicationSettings
+from mailtm_preapplication import MailTmSettings
 from roofz_replier import RoofzReplier, RoofzReplySettings, _build_contact_payload
 from scrapers.base import Listing
 
@@ -25,12 +24,23 @@ def _settings(**overrides) -> RoofzReplySettings:
         "preapplication_enabled": False,
         "preapplication_poll_seconds": 1,
         "preapplication_poll_interval_seconds": 1,
-        "gmail": GmailPreApplicationSettings(
-            credentials_path=Path("missing_credentials.json"),
-            token_path=Path("missing_token.json"),
-            sender="living@rockfieldrealestate.com",
-            subject_prefix="Start your pre-application",
+        "mailtm": MailTmSettings(
+            api_base="https://api.mail.tm",
+            address="tenant@example.com",
+            password="secret",
+            preapplication_sender="living@rockfieldrealestate.com",
+            forwarder_address="tenant@gmail.example",
+            preapplication_subject_prefix="Start your pre-application",
+            confirmation_sender="living@rockfieldrealestate.com",
+            confirmation_subject_patterns=("confirmation", "confirmed", "received", "bevestiging", "ontvangen"),
         ),
+        "initials": "N.G.",
+        "birth_date": "01-01-2003",
+        "rent_together": False,
+        "current_living_situation": "Single without children",
+        "monthly_income": "1000",
+        "annual_income": "12000",
+        "savings": "100000",
         "expected_stay_duration": "1 year",
         "expected_move_date": "01/07/2026",
         "gender": "Male",
@@ -66,8 +76,11 @@ class RoofzReplySettingsTests(unittest.TestCase):
         self.assertEqual(_settings(phone_number="").ready_error(), "ROOFZ_PHONE_NUMBER is missing.")
         self.assertEqual(_settings(message="").ready_error(), "ROOFZ_REPLY_MESSAGE is missing.")
 
-    def test_preapplication_ready_error_requires_gmail_token_when_enabled(self):
-        self.assertIn("missing_credentials.json", _settings(preapplication_enabled=True).ready_error())
+    def test_preapplication_ready_error_requires_birth_date_when_enabled(self):
+        self.assertEqual(
+            _settings(preapplication_enabled=True, birth_date="").ready_error(),
+            "ROOFZ_BIRTH_DATE is missing.",
+        )
 
     def test_build_contact_payload_matches_roofz_api_shape(self):
         payload = _build_contact_payload(_settings(), "12532581")

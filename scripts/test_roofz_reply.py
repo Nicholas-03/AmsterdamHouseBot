@@ -49,7 +49,14 @@ async def main() -> int:
     print(f"status={result.status}")
     if result.detail:
         print(f"detail={result.detail}")
-    return 0 if result.status in {"dry_run_ready", "sent", "sent_preapplication_pending", "preapplication_sent"} else 1
+    success_statuses = {
+        "dry_run_ready",
+        "sent",
+        "sent_preapplication_pending",
+        "preapplication_sent",
+        "preapplication_confirmed",
+    }
+    return 0 if result.status in success_statuses else 1
 
 
 async def _resolve_listing(args) -> Listing | None:

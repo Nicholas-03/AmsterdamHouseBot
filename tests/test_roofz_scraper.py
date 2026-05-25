@@ -26,6 +26,30 @@ class RoofzScraperTests(unittest.TestCase):
             {"property_id": "12532581", "stage": "option", "status": "available"},
         )
 
+    def test_parse_row_removes_postcode_from_concatenated_title(self):
+        listing = RoofzScraper(city="Amsterdam")._parse_row(
+            {
+                "href": "https://www.roofz.eu/huur/woningen/jan-van-galenstraat-738",
+                "text": "Available Jan van Galenstraat 7381061 AZ, AMSTERDAM Rent price: EUR 775 p/m 24 m2",
+                "propertyId": "12367539",
+            }
+        )
+
+        self.assertIsNotNone(listing)
+        self.assertEqual(listing.title, "Jan van Galenstraat 738")
+
+    def test_parse_row_keeps_unit_suffix_before_postcode(self):
+        listing = RoofzScraper(city="Amsterdam")._parse_row(
+            {
+                "href": "https://www.roofz.eu/huur/woningen/spaklerweg-14-e-4",
+                "text": "Available Spaklerweg 14 E-41096 BA, AMSTERDAM Rent price: EUR 1298 p/m 31 m2",
+                "propertyId": "12440190",
+            }
+        )
+
+        self.assertIsNotNone(listing)
+        self.assertEqual(listing.title, "Spaklerweg 14 E-4")
+
 
 if __name__ == "__main__":
     unittest.main()

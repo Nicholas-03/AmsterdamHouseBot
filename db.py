@@ -331,6 +331,8 @@ async def mark_auto_reply_result(
         "submitted_unconfirmed",
         "sent_preapplication_pending",
         "sent_preapplication_failed",
+        "preapplication_confirmed",
+        "preapplication_confirmation_missing",
         "preapplication_sent",
         "preapplication_submitted_unconfirmed",
     }
