@@ -50,6 +50,7 @@ def create_application() -> Application:
     app = Application.builder().token(config.TELEGRAM_TOKEN).post_init(_post_init).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("filters", cmd_filters))
     app.add_handler(CommandHandler("pause", cmd_pause))
     app.add_handler(CommandHandler("resume", cmd_resume))
@@ -98,18 +99,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     logger.info("/start from chat %s", update.effective_chat.id)
-    await update.message.reply_text(
-        "Amsterdam House Bot is running.\n\n"
-        "Commands:\n"
-        "/search - set Kamernet property types, rent, bedrooms, and size filters\n"
-        "/filters - show active filters\n"
-        "/test - scan now\n"
-        "/pause - pause notifications\n"
-        "/resume - resume notifications\n"
-        "/clear - clear sent/seen listings\n\n"
-        "Notifications start after you complete /search.\n"
-        f"I scan every {_format_interval(config.POLL_INTERVAL_SECONDS)}."
-    )
+    await _send_help(update)
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _ensure_authorized(update):
+        return
+
+    logger.info("/help from chat %s", update.effective_chat.id)
+    await _send_help(update)
 
 
 async def cmd_filters(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -431,6 +429,23 @@ def _format_property_type_selection(property_types: list[str]) -> str:
     return (
         f"Selected: {selected}\n"
         "Choose another property type, tap a selected type again to remove it, or tap Done."
+    )
+
+
+async def _send_help(update: Update) -> None:
+    await update.message.reply_text(
+        "Amsterdam House Bot is running.\n\n"
+        "Commands:\n"
+        "/help - show this help message\n"
+        "/search - set Kamernet property types, rent, bedrooms, and size filters\n"
+        "/filters - show active filters\n"
+        "/test - scan now\n"
+        "/pause - pause notifications\n"
+        "/resume - resume notifications\n"
+        "/clear - clear sent/seen listings\n"
+        "/cancel - cancel search setup\n\n"
+        "Notifications start after you complete /search.\n"
+        f"I scan every {_format_interval(config.POLL_INTERVAL_SECONDS)}."
     )
 
 

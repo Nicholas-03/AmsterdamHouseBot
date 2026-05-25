@@ -110,6 +110,7 @@ After that, the scheduled scanner will keep running in the background while the 
 ## Available Commands
 
 - `/start` - initialize the bot and show help
+- `/help` - show available commands
 - `/search` - save or update filters
 - `/filters` - show current filters
 - `/test` - run a scan immediately

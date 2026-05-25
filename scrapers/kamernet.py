@@ -115,6 +115,12 @@ class KamernetScraper(BaseScraper):
             logger.error("Kamernet scrape error: %s", exc)
             return []
 
+    def _matches_filters(self, listing: Listing) -> bool:
+        return (
+            super()._matches_filters(listing)
+            and _listing_matches_city(listing, self.city)
+        )
+
     def _parse_next_data(self, data: dict) -> list[Listing]:
         page_props = data.get("props", {}).get("pageProps", {})
         results = _find_listing_items(page_props)
@@ -266,6 +272,24 @@ def _search_categories_for_property_types(property_types: str | Iterable[str] | 
         if property_type in _SEARCH_CATEGORIES_BY_PROPERTY_TYPE
     ]
     return ",".join(categories) or KAMERNET_DEFAULT_SEARCH_CATEGORIES
+
+
+def _listing_matches_city(listing: Listing, city: str) -> bool:
+    target = _normalize_city(city)
+    address = listing.address or ""
+    address_parts = [part.strip() for part in address.split(",") if part.strip()]
+    city_candidate = address_parts[-1] if address_parts else address
+    normalized_candidate = _normalize_city(city_candidate)
+    return (
+        normalized_candidate == target
+        or normalized_candidate.endswith(f" {target}")
+    )
+
+
+def _normalize_city(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.casefold())).strip()
 
 
 def _first_present_int(item: dict, *keys: str) -> int | None:
