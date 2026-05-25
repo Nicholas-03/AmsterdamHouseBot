@@ -22,6 +22,8 @@ from scrapers.roofz import RoofzScraper
 logger = logging.getLogger(__name__)
 
 _AUTO_REPLY_WARNING_STATUSES = {
+    "confirmation_error",
+    "confirmation_missing",
     "sent_preapplication_pending",
     "sent_preapplication_failed",
     "preapplication_confirmation_missing",

@@ -10,10 +10,23 @@ from bs4 import BeautifulSoup
 
 
 @dataclass(frozen=True)
-class MailTmSettings:
+class MailTmAuthSettings:
     api_base: str
     address: str
     password: str
+
+    def ready_error(self, prefix: str = "MAILTM") -> str | None:
+        if not self.api_base:
+            return f"{prefix}_API_BASE is missing."
+        if not self.address:
+            return f"{prefix}_ADDRESS is missing."
+        if not self.password:
+            return f"{prefix}_PASSWORD is missing."
+        return None
+
+
+@dataclass(frozen=True)
+class MailTmSettings(MailTmAuthSettings):
     preapplication_sender: str
     forwarder_address: str
     preapplication_subject_prefix: str
@@ -37,12 +50,9 @@ class MailTmSettings:
         )
 
     def ready_error(self) -> str | None:
-        if not self.api_base:
-            return "ROOFZ_MAILTM_API_BASE is missing."
-        if not self.address:
-            return "ROOFZ_MAILTM_ADDRESS is missing."
-        if not self.password:
-            return "ROOFZ_MAILTM_PASSWORD is missing."
+        auth_error = super().ready_error("ROOFZ_MAILTM")
+        if auth_error:
+            return auth_error
         if not self.preapplication_sender and not self.forwarder_address:
             return "ROOFZ_MAILTM_PREAPPLICATION_SENDER or ROOFZ_MAILTM_FORWARDER_ADDRESS is missing."
         if not self.preapplication_subject_prefix:
@@ -65,7 +75,7 @@ class MailTmMessage:
 
 
 class MailTmClient:
-    def __init__(self, settings: MailTmSettings):
+    def __init__(self, settings: MailTmAuthSettings):
         self.settings = settings
         self._client = httpx.Client(timeout=30)
         self._token = ""
@@ -115,7 +125,7 @@ def find_preapplication_messages(
 ) -> list[MailTmMessage]:
     return _find_messages(
         client,
-        senders=_mailtm_senders(settings.preapplication_sender, settings.forwarder_address),
+        senders=mailtm_senders(settings.preapplication_sender, settings.forwarder_address),
         subject_patterns=(settings.preapplication_subject_prefix,),
         listing_title=listing_title,
         since=since,
@@ -132,7 +142,7 @@ def find_confirmation_messages(
 ) -> list[MailTmMessage]:
     messages = _find_messages(
         client,
-        senders=_mailtm_senders(settings.confirmation_sender, settings.forwarder_address),
+        senders=mailtm_senders(settings.confirmation_sender, settings.forwarder_address),
         subject_patterns=settings.confirmation_subject_patterns,
         listing_title=listing_title,
         since=since,
@@ -144,6 +154,34 @@ def find_confirmation_messages(
         message
         for message in messages
         if preapplication_prefix not in message.subject.casefold()
+    ]
+
+
+def find_mailtm_messages(
+    client: MailTmClient,
+    senders: tuple[str, ...],
+    subject_patterns: tuple[str, ...],
+    listing_title: str = "",
+    since: datetime | None = None,
+    unread_only: bool = False,
+    require_links: bool = False,
+    exclude_subject_patterns: tuple[str, ...] = (),
+) -> list[MailTmMessage]:
+    messages = _find_messages(
+        client,
+        senders=senders,
+        subject_patterns=subject_patterns,
+        listing_title=listing_title,
+        since=since,
+        unread_only=unread_only,
+        require_links=require_links,
+    )
+    if not exclude_subject_patterns:
+        return messages
+    return [
+        message
+        for message in messages
+        if not any(pattern.casefold() in message.subject.casefold() for pattern in exclude_subject_patterns)
     ]
 
 
@@ -218,7 +256,7 @@ def _message_bodies(message: dict) -> list[str]:
     return bodies
 
 
-def _mailtm_senders(*values: str) -> tuple[str, ...]:
+def mailtm_senders(*values: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value.strip() for value in values if value.strip()))
 
 

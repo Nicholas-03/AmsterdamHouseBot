@@ -99,6 +99,36 @@ ROOFZ_REPLY_DRY_RUN = _parse_bool(os.getenv("ROOFZ_REPLY_DRY_RUN"), KAMERNET_REP
 ROOFZ_MAILTM_API_BASE = os.getenv("ROOFZ_MAILTM_API_BASE", "https://api.mail.tm").rstrip("/")
 ROOFZ_MAILTM_ADDRESS = os.getenv("ROOFZ_MAILTM_ADDRESS", "").strip()
 ROOFZ_MAILTM_PASSWORD = os.getenv("ROOFZ_MAILTM_PASSWORD", "")
+
+FUNDA_MAILTM_API_BASE = os.getenv("FUNDA_MAILTM_API_BASE", ROOFZ_MAILTM_API_BASE).rstrip("/")
+FUNDA_MAILTM_ADDRESS = os.getenv("FUNDA_MAILTM_ADDRESS", ROOFZ_MAILTM_ADDRESS).strip()
+FUNDA_MAILTM_PASSWORD = os.getenv("FUNDA_MAILTM_PASSWORD", ROOFZ_MAILTM_PASSWORD)
+FUNDA_CONFIRMATION_ENABLED = _parse_bool(
+    os.getenv("FUNDA_CONFIRMATION_ENABLED"),
+    bool(FUNDA_MAILTM_ADDRESS and FUNDA_MAILTM_PASSWORD),
+)
+FUNDA_CONFIRMATION_POLL_SECONDS = _parse_non_negative_int(
+    os.getenv("FUNDA_CONFIRMATION_POLL_SECONDS"),
+    180,
+)
+FUNDA_CONFIRMATION_POLL_INTERVAL_SECONDS = _parse_non_negative_int(
+    os.getenv("FUNDA_CONFIRMATION_POLL_INTERVAL_SECONDS"),
+    15,
+)
+FUNDA_MAILTM_FORWARDER_ADDRESS = os.getenv("FUNDA_MAILTM_FORWARDER_ADDRESS", FUNDA_EMAIL).strip()
+FUNDA_MAILTM_CONFIRMATION_SENDER = os.getenv(
+    "FUNDA_MAILTM_CONFIRMATION_SENDER",
+    "notificaties@service.funda.nl",
+).strip()
+FUNDA_MAILTM_CONFIRMATION_SUBJECT_PATTERNS = tuple(
+    item.strip()
+    for item in os.getenv(
+        "FUNDA_MAILTM_CONFIRMATION_SUBJECT_PATTERNS",
+        "bevestiging,confirmation,confirmed",
+    ).split(",")
+    if item.strip()
+)
+
 ROOFZ_EMAIL = _getenv_fallback("ROOFZ_EMAIL", KAMERNET_EMAIL).strip()
 ROOFZ_FIRST_NAME = os.getenv("ROOFZ_FIRST_NAME", FUNDA_FIRST_NAME).strip()
 ROOFZ_LAST_NAME = os.getenv("ROOFZ_LAST_NAME", FUNDA_LAST_NAME).strip()

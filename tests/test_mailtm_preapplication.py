@@ -5,6 +5,7 @@ from mailtm_preapplication import (
     MailTmSettings,
     extract_preapplication_links,
     find_confirmation_messages,
+    find_mailtm_messages,
     find_preapplication_messages,
 )
 
@@ -167,6 +168,31 @@ class MailTmPreApplicationTests(unittest.TestCase):
             client,
             _settings(),
             listing_title="Jan van Galenstraat 502",
+            since=datetime(2026, 5, 25, 19, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].message_id, "1")
+
+    def test_find_mailtm_messages_matches_forwarded_funda_confirmation(self):
+        client = FakeMailTmClient(
+            [
+                {
+                    "id": "1",
+                    "subject": "Fwd: Bevestiging van je reactie op John Blankensteinstraat 127-B Amsterdam",
+                    "from": {"address": "tenant@gmail.example"},
+                    "seen": True,
+                    "createdAt": "2026-05-25T19:20:40+00:00",
+                },
+            ],
+            {"1": {"text": "Thanks", "html": []}},
+        )
+
+        messages = find_mailtm_messages(
+            client,
+            senders=("tenant@gmail.example",),
+            subject_patterns=("bevestiging", "confirmation"),
+            listing_title="John Blankensteinstraat 127-B",
             since=datetime(2026, 5, 25, 19, 0, tzinfo=timezone.utc),
         )
 

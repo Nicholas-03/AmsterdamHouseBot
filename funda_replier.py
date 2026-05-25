@@ -1,13 +1,62 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import httpx
 
+from mailtm_preapplication import MailTmAuthSettings, MailTmClient, find_mailtm_messages, mailtm_senders
 from scrapers.base import Listing
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FundaConfirmationSettings:
+    enabled: bool
+    poll_seconds: int
+    poll_interval_seconds: int
+    mailtm: MailTmAuthSettings
+    sender: str
+    forwarder_address: str
+    subject_patterns: tuple[str, ...]
+
+    @classmethod
+    def from_config(cls) -> FundaConfirmationSettings:
+        import config
+
+        return cls(
+            enabled=config.FUNDA_CONFIRMATION_ENABLED,
+            poll_seconds=config.FUNDA_CONFIRMATION_POLL_SECONDS,
+            poll_interval_seconds=max(1, config.FUNDA_CONFIRMATION_POLL_INTERVAL_SECONDS),
+            mailtm=MailTmAuthSettings(
+                api_base=config.FUNDA_MAILTM_API_BASE,
+                address=config.FUNDA_MAILTM_ADDRESS,
+                password=config.FUNDA_MAILTM_PASSWORD,
+            ),
+            sender=config.FUNDA_MAILTM_CONFIRMATION_SENDER,
+            forwarder_address=config.FUNDA_MAILTM_FORWARDER_ADDRESS,
+            subject_patterns=tuple(config.FUNDA_MAILTM_CONFIRMATION_SUBJECT_PATTERNS),
+        )
+
+    def ready_error(self) -> str | None:
+        if not self.enabled:
+            return None
+        auth_error = self.mailtm.ready_error("FUNDA_MAILTM")
+        if auth_error:
+            return auth_error
+        if not self.sender and not self.forwarder_address:
+            return "FUNDA_MAILTM_CONFIRMATION_SENDER or FUNDA_MAILTM_FORWARDER_ADDRESS is missing."
+        if not self.subject_patterns:
+            return "FUNDA_MAILTM_CONFIRMATION_SUBJECT_PATTERNS is missing."
+        return None
+
+    @property
+    def senders(self) -> tuple[str, ...]:
+        return mailtm_senders(self.sender, self.forwarder_address)
 
 
 @dataclass(frozen=True)
@@ -23,6 +72,7 @@ class FundaReplySettings:
     viewing_request: bool
     contact_api_base: str
     timeout_seconds: int
+    confirmation: FundaConfirmationSettings
 
     @classmethod
     def from_config(cls) -> FundaReplySettings:
@@ -40,6 +90,7 @@ class FundaReplySettings:
             viewing_request=config.FUNDA_VIEWING_REQUEST,
             contact_api_base=config.FUNDA_CONTACT_API_BASE,
             timeout_seconds=max(5, config.FUNDA_BROWSER_TIMEOUT_SECONDS),
+            confirmation=FundaConfirmationSettings.from_config(),
         )
 
     def ready_error(self) -> str | None:
@@ -55,7 +106,7 @@ class FundaReplySettings:
             return "FUNDA_PHONE_NUMBER is missing."
         if not self.message:
             return "FUNDA_REPLY_MESSAGE is missing."
-        return None
+        return self.confirmation.ready_error()
 
 
 @dataclass(frozen=True)
@@ -100,6 +151,20 @@ class FundaReplier:
             ),
         }
 
+        started_at = datetime.now(timezone.utc)
+        response_result = await self._send_contact_request(listing, url, office_id, headers, payload)
+        if response_result.status != "sent" or not self.settings.confirmation.enabled:
+            return response_result
+        return await self._wait_for_confirmation(listing, started_at)
+
+    async def _send_contact_request(
+        self,
+        listing: Listing,
+        url: str,
+        office_id: str,
+        headers: dict[str, str],
+        payload: dict,
+    ) -> FundaReplyResult:
         try:
             async with httpx.AsyncClient(timeout=self.settings.timeout_seconds) as client:
                 response = await client.post(
@@ -121,6 +186,35 @@ class FundaReplier:
         if response.status_code in {401, 403, 429}:
             return FundaReplyResult("blocked", detail)
         return FundaReplyResult("submit_failed", f"{response.status_code}: {detail}")
+
+    async def _wait_for_confirmation(self, listing: Listing, started_at: datetime) -> FundaReplyResult:
+        confirmation = self.settings.confirmation
+        deadline = time.monotonic() + confirmation.poll_seconds
+        try:
+            with MailTmClient(confirmation.mailtm) as mailtm:
+                while True:
+                    messages = await asyncio.to_thread(
+                        find_mailtm_messages,
+                        mailtm,
+                        confirmation.senders,
+                        confirmation.subject_patterns,
+                        listing.title,
+                        started_at,
+                    )
+                    if messages:
+                        return FundaReplyResult("confirmation_confirmed", "Funda confirmation email arrived.")
+                    if time.monotonic() >= deadline:
+                        return FundaReplyResult(
+                            "confirmation_missing",
+                            "Funda accepted the contact request, but no confirmation email arrived in time.",
+                        )
+                    await asyncio.sleep(confirmation.poll_interval_seconds)
+        except httpx.HTTPError as exc:
+            logger.exception("Funda confirmation check failed for %s", listing.url)
+            return FundaReplyResult(
+                "confirmation_error",
+                f"Funda accepted the contact request, but mail.tm confirmation check failed: {exc}",
+            )
 
 
 def _build_contact_payload(settings: FundaReplySettings) -> dict:

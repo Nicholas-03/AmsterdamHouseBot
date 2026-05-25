@@ -19,6 +19,7 @@ async def main() -> int:
     parser.add_argument("--global-id", help="Funda internal global listing id")
     parser.add_argument("--office-id", help="Funda broker/office id")
     parser.add_argument("--listing-id", help="Public Funda listing id. Defaults to the id in --url.")
+    parser.add_argument("--title", help="Listing title/address used to match the confirmation email.")
     parser.add_argument(
         "--live",
         action="store_true",
@@ -52,7 +53,7 @@ async def main() -> int:
     print(f"status={result.status}")
     if result.detail:
         print(f"detail={result.detail}")
-    return 0 if result.status in {"dry_run_ready", "sent"} else 1
+    return 0 if result.status in {"dry_run_ready", "sent", "confirmation_confirmed"} else 1
 
 
 async def _resolve_listing(args) -> Listing | None:
@@ -62,7 +63,7 @@ async def _resolve_listing(args) -> Listing | None:
         return Listing(
             id=listing_id,
             source=FundaScraper.SOURCE,
-            title="Funda reply test",
+            title=args.title or "Funda reply test",
             price="",
             address="",
             url=url,

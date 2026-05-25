@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 KAMERNET_REPLY_SENT_STATUSES = {
     "sent",
     "submitted_unconfirmed",
+    "confirmation_confirmed",
+    "confirmation_error",
+    "confirmation_missing",
     "sent_preapplication_pending",
     "sent_preapplication_failed",
     "preapplication_confirmed",

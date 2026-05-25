@@ -3,8 +3,27 @@ import unittest
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-from funda_replier import FundaReplier, FundaReplySettings, _build_contact_payload
+from funda_replier import FundaConfirmationSettings, FundaReplier, FundaReplySettings, _build_contact_payload
+from mailtm_preapplication import MailTmAuthSettings
 from scrapers.base import Listing
+
+
+def _confirmation(**overrides) -> FundaConfirmationSettings:
+    values = {
+        "enabled": False,
+        "poll_seconds": 1,
+        "poll_interval_seconds": 1,
+        "mailtm": MailTmAuthSettings(
+            api_base="https://api.mail.tm",
+            address="tenant@example.com",
+            password="secret",
+        ),
+        "sender": "",
+        "forwarder_address": "tenant@gmail.example",
+        "subject_patterns": ("bevestiging", "confirmation", "confirmed"),
+    }
+    values.update(overrides)
+    return FundaConfirmationSettings(**values)
 
 
 def _settings(**overrides) -> FundaReplySettings:
@@ -20,6 +39,7 @@ def _settings(**overrides) -> FundaReplySettings:
         "viewing_request": True,
         "contact_api_base": "https://contacts-bff.funda.io",
         "timeout_seconds": 10,
+        "confirmation": _confirmation(),
     }
     values.update(overrides)
     return FundaReplySettings(**values)
@@ -47,6 +67,17 @@ class FundaReplySettingsTests(unittest.TestCase):
         self.assertEqual(_settings(last_name="").ready_error(), "FUNDA_LAST_NAME is missing.")
         self.assertEqual(_settings(phone_number="").ready_error(), "FUNDA_PHONE_NUMBER is missing.")
         self.assertEqual(_settings(message="").ready_error(), "FUNDA_REPLY_MESSAGE is missing.")
+
+    def test_confirmation_ready_error_requires_mailtm_when_enabled(self):
+        self.assertEqual(
+            _settings(
+                confirmation=_confirmation(
+                    enabled=True,
+                    mailtm=MailTmAuthSettings(api_base="https://api.mail.tm", address="", password="secret"),
+                )
+            ).ready_error(),
+            "FUNDA_MAILTM_ADDRESS is missing.",
+        )
 
     def test_build_contact_payload_matches_funda_contact_api_shape(self):
         payload = _build_contact_payload(_settings())

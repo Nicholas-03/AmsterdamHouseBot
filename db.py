@@ -329,6 +329,9 @@ async def mark_auto_reply_result(
     sent_statuses = {
         "sent",
         "submitted_unconfirmed",
+        "confirmation_confirmed",
+        "confirmation_error",
+        "confirmation_missing",
         "sent_preapplication_pending",
         "sent_preapplication_failed",
         "preapplication_confirmed",

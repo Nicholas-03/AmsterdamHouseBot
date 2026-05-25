@@ -96,6 +96,11 @@ class FakeReplier:
         return KamernetReplyResult("dry_run_ready", "ok")
 
 
+class FakeWarningReplier(FakeReplier):
+    async def reply_to_listing(self, listing):
+        return KamernetReplyResult("confirmation_missing", "no mail")
+
+
 class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
     async def test_auto_reply_marks_attempt_and_result(self):
         mark_result = AsyncMock()
@@ -144,6 +149,28 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(attempted)
         mark_result.assert_not_awaited()
+
+    async def test_auto_reply_sends_warning_for_missing_confirmation(self):
+        bot = AsyncMock()
+        with (
+            patch.object(scanner.db, "get_auto_reply", AsyncMock(return_value=None)),
+            patch.object(scanner.db, "mark_auto_reply_result", AsyncMock()),
+        ):
+            attempted = await scanner._maybe_auto_reply_to_listing(
+                123,
+                _listing(),
+                _settings(dry_run=False),
+                None,
+                attempts_so_far=0,
+                replier_cls=FakeWarningReplier,
+                result_cls=KamernetReplyResult,
+                source_label="Funda",
+                bot=bot,
+            )
+
+        self.assertTrue(attempted)
+        bot.send_message.assert_awaited_once()
+        self.assertIn("confirmation_missing", bot.send_message.await_args.kwargs["text"])
 
 
 if __name__ == "__main__":

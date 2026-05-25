@@ -106,6 +106,11 @@ Funda auto-reply variables:
 - `FUNDA_REPLY_MESSAGE_FILE`: optional path to a UTF-8 text file containing the Funda reply message; defaults to the Kamernet message when unset
 - `FUNDA_REPLY_MAX_PER_SCAN`: optional, defaults to `0` for no cap; set a positive number to limit replies per scan
 - `FUNDA_CONTACT_API_BASE`: optional, defaults to `https://contacts-bff.funda.io`
+- `FUNDA_CONFIRMATION_ENABLED`: optional, defaults to `1` when a mail.tm inbox is configured; checks for the forwarded Funda confirmation email after a live send
+- `FUNDA_MAILTM_ADDRESS`: optional, defaults to `ROOFZ_MAILTM_ADDRESS`; mail.tm inbox where forwarded Funda emails arrive
+- `FUNDA_MAILTM_PASSWORD`: optional, defaults to `ROOFZ_MAILTM_PASSWORD`
+- `FUNDA_MAILTM_FORWARDER_ADDRESS`: optional, defaults to `FUNDA_EMAIL`; use this when Gmail forwards messages into mail.tm
+- `FUNDA_CONFIRMATION_POLL_SECONDS`: optional, defaults to `180`
 
 Roofz auto-reply variables:
 
@@ -215,7 +220,23 @@ Funda replies use the same contact API used by the website contact form, avoidin
 python scripts/test_funda_reply.py --global-id 8013049 --office-id 60557 --url "https://www.funda.nl/detail/huur/amsterdam/appartement-john-blankensteinstraat-127-b/80822048/"
 ```
 
-To allow a live Funda send, set `FUNDA_REPLY_DRY_RUN=0` and pass `--live` for one listing. The scanner also respects `FUNDA_REPLY_DRY_RUN=0`, so only switch it after the one-listing live test behaves as expected.
+To allow a live Funda send, set `FUNDA_REPLY_DRY_RUN=0` and pass `--live` for one listing. When mail.tm is configured, the test waits for the forwarded Funda confirmation email:
+
+```env
+FUNDA_EMAIL=you@gmail.com
+FUNDA_MAILTM_ADDRESS=you@example.com
+FUNDA_MAILTM_PASSWORD=replace-with-mailtm-password
+FUNDA_MAILTM_FORWARDER_ADDRESS=you@gmail.com
+FUNDA_CONFIRMATION_ENABLED=1
+```
+
+You can also verify existing confirmations:
+
+```bash
+python scripts/check_funda_confirmations.py --title "John Blankensteinstraat 127-B"
+```
+
+The scanner also respects `FUNDA_REPLY_DRY_RUN=0`, so only switch it after the one-listing live test behaves as expected.
 
 Roofz replies use the same contact API used by the listing page. Run a one-listing dry-run before enabling live sends:
 
