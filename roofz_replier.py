@@ -383,17 +383,21 @@ async def _fill_preapplication_form(page, settings: RoofzReplySettings) -> None:
     for radio in await page.locator("input[type='radio']").all():
         try:
             option_text = await _radio_option_text(radio)
-            group_text = await _control_label_text(radio)
+            group_text = await _radio_group_text(radio)
             value = (await radio.get_attribute("value") or "").casefold()
             normalized_option = option_text.casefold()
             normalized_group = group_text.casefold()
-            if value == settings.gender.casefold() or settings.gender.casefold() in normalized_option:
+            if _radio_option_matches(value, normalized_option, settings.gender):
                 await radio.check(force=True)
             elif "rent together" in normalized_group or "together with someone" in normalized_group:
                 expected = "true" if settings.rent_together else "false"
                 expected_text = "yes" if settings.rent_together else "no"
                 expected_nl = "ja" if settings.rent_together else "nee"
-                if value in {expected, expected_text, expected_nl} or expected_text in normalized_option or expected_nl in normalized_option:
+                if (
+                    value == expected
+                    or _radio_option_matches(value, normalized_option, expected_text)
+                    or _radio_option_matches(value, normalized_option, expected_nl)
+                ):
                     await radio.check(force=True)
         except Exception:
             continue
@@ -417,6 +421,21 @@ async def _control_label_text(control) -> str:
             const wrapper = el.closest("label, .q-field, .input-field, .form-group, .field");
             if (wrapper) bits.push(wrapper.textContent);
             return bits.filter(Boolean).join(" ");
+        }
+        """
+    )
+
+
+async def _radio_group_text(radio) -> str:
+    return await radio.evaluate(
+        """
+        (el) => {
+            const container =
+                el.closest(".form-group")
+                || el.closest("[role='radiogroup']")
+                || el.closest("mat-radio-group")
+                || el.closest(".field");
+            return (container?.textContent || "").replace(/\\s+/g, " ").trim();
         }
         """
     )
@@ -453,6 +472,15 @@ async def _radio_option_text(radio) -> str:
         }
         """
     )
+
+
+def _radio_option_matches(value: str, normalized_option_text: str, expected: str) -> bool:
+    expected_normalized = expected.casefold().strip()
+    if not expected_normalized:
+        return False
+    if value == expected_normalized:
+        return True
+    return re.search(rf"(?<![a-z0-9]){re.escape(expected_normalized)}(?![a-z0-9])", normalized_option_text) is not None
 
 
 def _value_for_label(label: str, values: dict[str, str]) -> str:

@@ -4,7 +4,7 @@ import unittest
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
 from mailtm_preapplication import MailTmSettings
-from roofz_replier import RoofzReplier, RoofzReplySettings, _build_contact_payload
+from roofz_replier import RoofzReplier, RoofzReplySettings, _build_contact_payload, _radio_option_matches
 from scrapers.base import Listing
 
 
@@ -91,6 +91,11 @@ class RoofzReplySettingsTests(unittest.TestCase):
         self.assertEqual(payload["subscription"]["phone"], "+391234567890")
         self.assertEqual(payload["subscription"]["property_id"], 12532581)
         self.assertIn("_ts", payload["subscription"]["metadata"])
+
+    def test_radio_option_matching_does_not_match_male_inside_female(self):
+        self.assertTrue(_radio_option_matches("male", "male", "Male"))
+        self.assertFalse(_radio_option_matches("female", "female", "Male"))
+        self.assertTrue(_radio_option_matches("false", "no", "No"))
 
 
 class RoofzReplierTests(unittest.IsolatedAsyncioTestCase):
