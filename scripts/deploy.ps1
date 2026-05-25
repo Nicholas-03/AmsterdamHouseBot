@@ -153,6 +153,7 @@ $timestamp = Get-Date -Format "yyyyMMddHHmmss"
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "amsterdam-house-bot-deploy-$timestamp"
 $staging = Join-Path $tempRoot "package"
 $archive = Join-Path $tempRoot "amsterdam-house-bot.zip"
+$bootstrapLfPath = Join-Path $tempRoot "vps_bootstrap.sh"
 $target = "${User}@${DropletHost}"
 $remoteArchive = "/tmp/amsterdam-house-bot-$timestamp.zip"
 $remoteEnv = "/tmp/amsterdam-house-bot-$timestamp.env"
@@ -170,7 +171,10 @@ try {
     Invoke-Native "scp" @identityArgs $envPath "${target}:$remoteEnv"
 
     Write-Host "Uploading bootstrap script"
-    Invoke-Native "scp" @identityArgs $bootstrapPath "${target}:$remoteBootstrap"
+    $bootstrapContent = [System.IO.File]::ReadAllText($bootstrapPath).Replace("`r`n", "`n")
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($bootstrapLfPath, $bootstrapContent, $utf8NoBom)
+    Invoke-Native "scp" @identityArgs $bootstrapLfPath "${target}:$remoteBootstrap"
 
     Write-Host "Running remote bootstrap"
     Invoke-Native "ssh" @identityArgs $target "chmod +x '$remoteBootstrap' && bash '$remoteBootstrap' '$remoteArchive' '$remoteEnv'"
