@@ -1,0 +1,78 @@
+import os
+import unittest
+
+os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
+
+from funda_replier import FundaReplier, FundaReplySettings, _build_contact_payload
+from scrapers.base import Listing
+
+
+def _settings(**overrides) -> FundaReplySettings:
+    values = {
+        "enabled": True,
+        "dry_run": True,
+        "email": "tenant@example.com",
+        "first_name": "Nicholas",
+        "last_name": "Boidi",
+        "phone_number": "+391234567890",
+        "message": "Dear property manager\n\nI am interested in this property.",
+        "max_per_scan": 1,
+        "viewing_request": True,
+        "contact_api_base": "https://contacts-bff.funda.io",
+        "timeout_seconds": 10,
+    }
+    values.update(overrides)
+    return FundaReplySettings(**values)
+
+
+def _listing(**overrides) -> Listing:
+    values = {
+        "id": "80822048",
+        "source": "funda",
+        "title": "Funda reply test",
+        "price": "EUR 1300/month",
+        "address": "Amsterdam",
+        "url": "https://www.funda.nl/detail/huur/amsterdam/example/80822048/",
+        "contact_url": "https://www.funda.nl/makelaar-contact/?listingId=8013049",
+        "reply_data": {"global_id": "8013049", "office_id": "60557"},
+    }
+    values.update(overrides)
+    return Listing(**values)
+
+
+class FundaReplySettingsTests(unittest.TestCase):
+    def test_ready_error_requires_contact_fields_and_message(self):
+        self.assertEqual(_settings(email="").ready_error(), "FUNDA_EMAIL is missing.")
+        self.assertEqual(_settings(first_name="").ready_error(), "FUNDA_FIRST_NAME is missing.")
+        self.assertEqual(_settings(last_name="").ready_error(), "FUNDA_LAST_NAME is missing.")
+        self.assertEqual(_settings(phone_number="").ready_error(), "FUNDA_PHONE_NUMBER is missing.")
+        self.assertEqual(_settings(message="").ready_error(), "FUNDA_REPLY_MESSAGE is missing.")
+
+    def test_build_contact_payload_matches_funda_contact_api_shape(self):
+        payload = _build_contact_payload(_settings())
+
+        self.assertEqual(payload["firstName"], "Nicholas")
+        self.assertEqual(payload["lastName"], "Boidi")
+        self.assertEqual(payload["emailAddress"], "tenant@example.com")
+        self.assertEqual(payload["phoneNumber"], "+391234567890")
+        self.assertEqual(payload["days"], [])
+        self.assertEqual(payload["dayParts"], [])
+        self.assertFalse(payload["loggedIn"])
+
+
+class FundaReplierTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dry_run_requires_global_and_office_ids(self):
+        async with FundaReplier(_settings()) as replier:
+            result = await replier.reply_to_listing(_listing())
+
+        self.assertEqual(result.status, "dry_run_ready")
+
+    async def test_missing_contact_data_is_reported_before_submit(self):
+        async with FundaReplier(_settings()) as replier:
+            result = await replier.reply_to_listing(_listing(reply_data={"global_id": "", "office_id": ""}))
+
+        self.assertEqual(result.status, "missing_contact_data")
+
+
+if __name__ == "__main__":
+    unittest.main()

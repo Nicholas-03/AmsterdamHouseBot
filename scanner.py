@@ -5,6 +5,13 @@ from telegram import Bot
 from telegram.constants import ParseMode
 
 import db
+from funda_replier import FundaReplier, FundaReplyResult, FundaReplySettings
+from kamernet_replier import (
+    KamernetReplier,
+    KamernetReplyResult,
+    KamernetReplySettings,
+    should_skip_existing_reply,
+)
 from scrapers.funda import FundaScraper
 from scrapers.huurwoningen import HuurwoningenScraper
 from scrapers.kamernet import KamernetScraper
@@ -20,11 +27,22 @@ _FILTER_MATCH_KEYS = (
     "min_bedrooms",
     "min_size_m2",
     "kamernet_property_type",
+    "auto_reply_enabled",
 )
 
 
 async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool = True) -> int:
     chat_id = user_filters["chat_id"]
+    kamernet_reply_settings = KamernetReplySettings.from_config()
+    kamernet_reply_settings_error = kamernet_reply_settings.ready_error()
+    funda_reply_settings = FundaReplySettings.from_config()
+    funda_reply_settings_error = funda_reply_settings.ready_error()
+    if user_filters.get("auto_reply_enabled"):
+        if kamernet_reply_settings.enabled and kamernet_reply_settings_error:
+            logger.warning("Kamernet auto-reply is unavailable for this scan: %s", kamernet_reply_settings_error)
+        if funda_reply_settings.enabled and funda_reply_settings_error:
+            logger.warning("Funda auto-reply is unavailable for this scan: %s", funda_reply_settings_error)
+
     scrapers = [
         ParariusScraper(
             city=user_filters["city"],
@@ -60,6 +78,10 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
     ]
 
     new_count = 0
+    reply_attempts = {
+        KamernetScraper.SOURCE: 0,
+        FundaScraper.SOURCE: 0,
+    }
     for scraper in scrapers:
         try:
             if not await _scan_is_current(chat_id, user_filters, require_active):
@@ -78,6 +100,33 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                 await db.mark_seen(listing.source, listing.id, listing.url, listing.title, listing.price)
                 await _send_notification(bot, chat_id, listing)
                 await db.mark_sent(chat_id, listing.source, listing.id)
+                if user_filters.get("auto_reply_enabled"):
+                    if listing.source == KamernetScraper.SOURCE:
+                        attempted = await _maybe_auto_reply_to_listing(
+                            chat_id,
+                            listing,
+                            kamernet_reply_settings,
+                            kamernet_reply_settings_error,
+                            reply_attempts[KamernetScraper.SOURCE],
+                            KamernetReplier,
+                            KamernetReplyResult,
+                            "Kamernet",
+                        )
+                        if attempted:
+                            reply_attempts[KamernetScraper.SOURCE] += 1
+                    elif listing.source == FundaScraper.SOURCE:
+                        attempted = await _maybe_auto_reply_to_listing(
+                            chat_id,
+                            listing,
+                            funda_reply_settings,
+                            funda_reply_settings_error,
+                            reply_attempts[FundaScraper.SOURCE],
+                            FundaReplier,
+                            FundaReplyResult,
+                            "Funda",
+                        )
+                        if attempted:
+                            reply_attempts[FundaScraper.SOURCE] += 1
                 new_count += 1
                 new_from_scraper += 1
             logger.info(
@@ -91,6 +140,74 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
             logger.error("Scraper %s failed for user %s: %s", scraper.SOURCE, chat_id, exc)
 
     return new_count
+
+
+async def _maybe_auto_reply_to_listing(
+    chat_id: int,
+    listing,
+    settings,
+    settings_error: str | None,
+    attempts_so_far: int,
+    replier_cls,
+    result_cls,
+    source_label: str,
+) -> bool:
+    if not settings.enabled:
+        return False
+    if settings_error:
+        return False
+    if settings.max_per_scan and attempts_so_far >= settings.max_per_scan:
+        logger.info(
+            "%s auto-reply cap reached for this scan: %d/%d",
+            source_label,
+            attempts_so_far,
+            settings.max_per_scan,
+        )
+        return False
+
+    existing_reply = await db.get_auto_reply(listing.source, listing.id)
+    if should_skip_existing_reply(existing_reply, settings.dry_run):
+        logger.info(
+            "%s auto-reply skipped for %s; existing status is %s.",
+            source_label,
+            listing.id,
+            existing_reply["status"],
+        )
+        return False
+
+    await db.mark_auto_reply_result(
+        listing.source,
+        listing.id,
+        listing.url,
+        chat_id,
+        "attempting",
+        settings.dry_run,
+    )
+
+    try:
+        async with replier_cls(settings) as replier:
+            result = await replier.reply_to_listing(listing)
+    except Exception as exc:
+        logger.exception("%s auto-reply crashed for listing %s", source_label, listing.id)
+        result = result_cls("error", str(exc))
+
+    await db.mark_auto_reply_result(
+        listing.source,
+        listing.id,
+        listing.url,
+        chat_id,
+        result.status,
+        settings.dry_run,
+        result.detail,
+    )
+    logger.info(
+        "%s auto-reply result for %s: %s (%s)",
+        source_label,
+        listing.id,
+        result.status,
+        result.detail,
+    )
+    return True
 
 
 async def _scan_is_current(chat_id: int, user_filters: dict, require_active: bool) -> bool:

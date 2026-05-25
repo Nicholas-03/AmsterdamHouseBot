@@ -12,6 +12,8 @@ from telegram.ext import (
 
 import config
 import db
+from funda_replier import FundaReplySettings
+from kamernet_replier import KamernetReplySettings
 from scanner import run_scan_for_user
 from scrapers.kamernet import (
     KAMERNET_PROPERTY_TYPE_LABELS,
@@ -52,6 +54,7 @@ def create_application() -> Application:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("filters", cmd_filters))
+    app.add_handler(CommandHandler("autoreply", cmd_autoreply))
     app.add_handler(CommandHandler("pause", cmd_pause))
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("test", cmd_test))
@@ -120,6 +123,50 @@ async def cmd_filters(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await update.message.reply_text(_format_filters(user_filters))
+
+
+async def cmd_autoreply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _ensure_authorized(update):
+        return
+
+    chat_id = update.effective_chat.id
+    user_filters = await db.get_filters(chat_id)
+    if not user_filters:
+        await update.message.reply_text("Set your filters first with /search.")
+        return
+
+    arg = context.args[0].casefold() if context.args else "status"
+    if arg in {"status", "show"}:
+        await update.message.reply_text(_format_auto_reply_status(user_filters))
+        return
+
+    if arg in {"off", "disable", "disabled", "stop"}:
+        await db.set_auto_reply(chat_id, False)
+        await update.message.reply_text(
+            "Auto-reply is off. I will still send matching listings in Telegram."
+        )
+        return
+
+    if arg in {"on", "enable", "enabled", "start"}:
+        status = _auto_reply_source_status()
+        if not any(item[1] is None for item in status):
+            await update.message.reply_text(
+                "Auto-reply cannot be enabled yet.\n"
+                "Server setup issues:\n"
+                + "\n".join(f"{label}: {error}" for label, error in status)
+            )
+            return
+
+        await db.set_auto_reply(chat_id, True)
+        await update.message.reply_text(
+            "Auto-reply is on for sources that are ready on the server.\n"
+            + "\n".join(_format_source_status(label, error) for label, error in status)
+            + "\n"
+            "Use /autoreply off to disable it."
+        )
+        return
+
+    await update.message.reply_text("Use /autoreply on, /autoreply off, or /autoreply status.")
 
 
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -439,6 +486,7 @@ async def _send_help(update: Update) -> None:
         "/help - show this help message\n"
         "/search - set Kamernet property types, rent, bedrooms, and size filters\n"
         "/filters - show active filters\n"
+        "/autoreply on|off|status - control Kamernet/Funda auto-replies\n"
         "/test - scan now\n"
         "/pause - pause notifications\n"
         "/resume - resume notifications\n"
@@ -458,6 +506,7 @@ def _format_filters(user_filters: dict) -> str:
     kamernet_property_type = format_kamernet_property_types(
         user_filters.get("kamernet_property_type", DEFAULT_KAMERNET_PROPERTY_TYPE),
     )
+    auto_reply_text = "On" if user_filters.get("auto_reply_enabled") else "Off"
     status_text = "Setup in progress"
     if not user_filters.get("setup_in_progress"):
         status_text = "Active" if user_filters["active"] else "Paused"
@@ -465,6 +514,7 @@ def _format_filters(user_filters: dict) -> str:
         "Active filters:\n"
         f"City: {user_filters['city']}\n"
         f"Kamernet property types: {kamernet_property_type}\n"
+        f"Auto-reply: {auto_reply_text}\n"
         "Kamernet search radius: 5 km\n"
         f"Max rent: {price_text}\n"
         f"Minimum bedrooms/rooms: {bedrooms_text}\n"
@@ -478,3 +528,28 @@ def _format_interval(seconds: int) -> str:
         minutes = seconds // 60
         return f"{minutes} minute{'s' if minutes != 1 else ''}"
     return f"{seconds} second{'s' if seconds != 1 else ''}"
+
+
+def _format_auto_reply_status(user_filters: dict) -> str:
+    status_text = "On" if user_filters.get("auto_reply_enabled") else "Off"
+    source_status = "\n".join(
+        _format_source_status(label, error)
+        for label, error in _auto_reply_source_status()
+    )
+    return (
+        "Auto-reply status:\n"
+        f"Toggle: {status_text}\n"
+        f"{source_status}\n\n"
+        "Use /autoreply on or /autoreply off."
+    )
+
+
+def _auto_reply_source_status() -> list[tuple[str, str | None]]:
+    return [
+        ("Kamernet", KamernetReplySettings.from_config().ready_error()),
+        ("Funda", FundaReplySettings.from_config().ready_error()),
+    ]
+
+
+def _format_source_status(label: str, error: str | None) -> str:
+    return f"{label}: {'Ready' if error is None else 'Not ready - ' + error}"

@@ -59,6 +59,8 @@ class FundaScraper(BaseScraper):
         listing_id = _listing_id(raw_listing, url)
         if not listing_id:
             return None
+        global_id = _first_text(getattr(raw_listing, "global_id", None))
+        office_id = _broker_id(raw_listing)
 
         title = _first_text(getattr(raw_listing, "title", None)) or f"Funda listing {listing_id}"
         city = _first_text(getattr(raw_listing, "city", None))
@@ -90,6 +92,11 @@ class FundaScraper(BaseScraper):
             price_eur=price_eur,
             bedrooms=rooms_count or bedrooms_count,
             size_m2_value=size_value,
+            contact_url=f"https://www.funda.nl/makelaar-contact/?listingId={global_id}" if global_id else None,
+            reply_data={
+                "global_id": global_id,
+                "office_id": office_id,
+            },
         )
 
 
@@ -122,6 +129,20 @@ def _listing_id(raw_listing, url: str) -> str:
         text = _first_text(value)
         if text:
             return text
+    return ""
+
+
+def _broker_id(raw_listing) -> str:
+    broker = getattr(raw_listing, "broker", None)
+    broker_id = _first_text(getattr(broker, "id", None))
+    if broker_id:
+        return broker_id
+
+    brokers = getattr(raw_listing, "brokers", None) or ()
+    for broker in brokers:
+        broker_id = _first_text(getattr(broker, "id", None))
+        if broker_id:
+            return broker_id
     return ""
 
 

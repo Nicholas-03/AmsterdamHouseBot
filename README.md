@@ -16,6 +16,7 @@ The bot stores user filters and already-seen listings in SQLite, so duplicate li
 
 - Runs a scheduled scan every `POLL_INTERVAL_SECONDS` seconds
 - Lets each Telegram user save their own Kamernet property types, rent, bedroom/room, and surface-area filters
+- Lets each Telegram user toggle Kamernet/Funda auto-replies on or off
 - Sends new listings directly in Telegram
 - Supports an on-demand scan with `/test`
 
@@ -80,6 +81,32 @@ Environment variables:
 - `DB_PATH`: optional, SQLite database path, defaults to `listings.db`
 - `TELEGRAM_ALLOWED_CHAT_IDS`: optional, comma-separated Telegram chat IDs allowed to use the bot. Leave empty for local unrestricted use.
 
+Kamernet auto-reply variables:
+
+- `KAMERNET_AUTO_REPLY_ENABLED`: optional, set to `1` to reply to new matching Kamernet listings
+- `KAMERNET_REPLY_DRY_RUN`: optional, defaults to `1`; keeps the bot from clicking the final send button
+- `KAMERNET_EMAIL`: Kamernet login email, required for password login
+- `KAMERNET_PASSWORD`: Kamernet password, required for password login; not needed when using a saved Kamernet session
+- `KAMERNET_REPLY_MESSAGE`: message to send to landlords, required when auto-reply is enabled
+- `KAMERNET_REPLY_MESSAGE_FILE`: optional path to a UTF-8 text file containing the reply message; useful for multiline messages
+- `KAMERNET_REPLY_MAX_PER_SCAN`: optional, defaults to `0` for no cap; set a positive number to limit replies per scan
+- `KAMERNET_EXPECTED_TENANCY_DURATION`: optional, defaults to `1 year` when Kamernet asks for planned stay
+- `KAMERNET_EXPECTED_MOVE_DATE`: optional, defaults to `07/01/2026` for July 1, 2026 when Kamernet asks for move-in date
+- `KAMERNET_STORAGE_STATE_PATH`: optional, defaults beside `DB_PATH`; stores the Kamernet login session
+
+Funda auto-reply variables:
+
+- `FUNDA_AUTO_REPLY_ENABLED`: optional, set to `1` to reply to new matching Funda listings
+- `FUNDA_REPLY_DRY_RUN`: optional, defaults to `KAMERNET_REPLY_DRY_RUN`; keeps the bot from submitting the final contact API request
+- `FUNDA_EMAIL`: optional, defaults to `KAMERNET_EMAIL`
+- `FUNDA_FIRST_NAME`: required when Funda auto-reply is enabled
+- `FUNDA_LAST_NAME`: required when Funda auto-reply is enabled
+- `FUNDA_PHONE_NUMBER`: required by Funda's contact form
+- `FUNDA_REPLY_MESSAGE`: optional message override for Funda
+- `FUNDA_REPLY_MESSAGE_FILE`: optional path to a UTF-8 text file containing the Funda reply message; defaults to the Kamernet message when unset
+- `FUNDA_REPLY_MAX_PER_SCAN`: optional, defaults to `0` for no cap; set a positive number to limit replies per scan
+- `FUNDA_CONTACT_API_BASE`: optional, defaults to `https://contacts-bff.funda.io`
+
 ### 5. Start the bot
 
 ```bash
@@ -105,7 +132,7 @@ On first boot the bot automatically creates the SQLite database and its tables.
    - minimum surface area in square meters
 4. Send `/test` to trigger an immediate scan.
 
-After that, the scheduled scanner will keep running in the background while the process stays alive.
+After that, the scheduled scanner will keep running in the background while the process stays alive. Send `/autoreply on` if you want the bot to answer new matching Kamernet and Funda listings automatically, and `/autoreply off` to disable replies while keeping Telegram notifications.
 
 ## Available Commands
 
@@ -113,6 +140,7 @@ After that, the scheduled scanner will keep running in the background while the 
 - `/help` - show available commands
 - `/search` - save or update filters
 - `/filters` - show current filters
+- `/autoreply on|off|status` - control Kamernet/Funda auto-replies
 - `/test` - run a scan immediately
 - `/pause` - pause notifications
 - `/resume` - resume notifications
@@ -125,6 +153,48 @@ After that, the scheduled scanner will keep running in the background while the 
 2. `bot.py` registers commands and schedules the recurring scan job.
 3. `scanner.py` runs all scrapers for each active user.
 4. `db.py` stores filters and deduplicates listings in SQLite.
+
+## Auto-Reply
+
+Auto-reply needs both server setup and a Telegram toggle. Each source has its own server-side flag, and the user must send `/autoreply on`. When enabled, it only runs after a new listing has already matched your filters and the Telegram notification has been sent. It records attempts in SQLite so the same listing is not answered twice, even if multiple Telegram users match it.
+
+Keep dry-run enabled for the first real test:
+
+```env
+KAMERNET_AUTO_REPLY_ENABLED=1
+KAMERNET_REPLY_DRY_RUN=1
+KAMERNET_EMAIL=you@example.com
+KAMERNET_REPLY_MESSAGE_FILE=kamernet_reply_message.txt
+KAMERNET_REPLY_MAX_PER_SCAN=0
+KAMERNET_EXPECTED_TENANCY_DURATION=1 year
+KAMERNET_EXPECTED_MOVE_DATE=07/01/2026
+```
+
+If Kamernet rejects password login in headless browser mode, create a saved session once from a visible browser:
+
+```bash
+python scripts/kamernet_save_session.py
+```
+
+The script logs in with `KAMERNET_EMAIL` and `KAMERNET_PASSWORD` when they are set. It saves the Kamernet session to `KAMERNET_STORAGE_STATE_PATH`, and the bot reuses that session for dry-run and live replies. If the session expires, run the script again.
+
+Run a one-listing dry-run before enabling live sends:
+
+```bash
+python scripts/test_kamernet_reply.py "https://kamernet.nl/en/for-rent/studio-amsterdam/example/studio-1234567"
+```
+
+The expected successful dry-run status is `dry_run_ready`. That means the bot logged in, opened the contact form, found the message field, filled the message, and skipped submit.
+
+To allow a live send, set `KAMERNET_REPLY_DRY_RUN=0` and pass `--live` to the test script for one listing. The scanner also respects `KAMERNET_REPLY_DRY_RUN=0`, so only switch it after the one-listing live test behaves as expected.
+
+Funda replies use the same contact API used by the website contact form, avoiding browser verification screens. Run a one-listing dry-run before enabling live sends:
+
+```bash
+python scripts/test_funda_reply.py --global-id 8013049 --office-id 60557 --url "https://www.funda.nl/detail/huur/amsterdam/appartement-john-blankensteinstraat-127-b/80822048/"
+```
+
+To allow a live Funda send, set `FUNDA_REPLY_DRY_RUN=0` and pass `--live` for one listing. The scanner also respects `FUNDA_REPLY_DRY_RUN=0`, so only switch it after the one-listing live test behaves as expected.
 
 ## Project Structure
 

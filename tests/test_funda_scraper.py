@@ -15,6 +15,7 @@ def _raw_listing(**overrides):
         "bedrooms": 1,
         "living_area": 55,
         "media": SimpleNamespace(photo_urls=("https://images.example/funda.jpg",)),
+        "broker": SimpleNamespace(id=60557),
         "tiny_id": "12345678",
         "global_id": 87654321,
         "id": "12345678",
@@ -38,6 +39,11 @@ class FundaScraperTests(unittest.TestCase):
         self.assertEqual(listing.size_m2, "55 m2")
         self.assertEqual(listing.size_m2_value, 55)
         self.assertEqual(listing.image_url, "https://images.example/funda.jpg")
+        self.assertEqual(
+            listing.contact_url,
+            "https://www.funda.nl/makelaar-contact/?listingId=87654321",
+        )
+        self.assertEqual(listing.reply_data, {"global_id": "87654321", "office_id": "60557"})
 
     def test_scrape_sync_uses_rental_filters_and_deduplicates(self):
         raw_listing = _raw_listing()

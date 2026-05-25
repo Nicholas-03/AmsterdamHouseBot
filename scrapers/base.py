@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 
@@ -17,6 +17,8 @@ class Listing:
     price_eur: int | None = None
     bedrooms: int | None = None
     size_m2_value: int | None = None
+    contact_url: str | None = None
+    reply_data: dict[str, str] = field(default_factory=dict)
 
 
 class BaseScraper(ABC):
