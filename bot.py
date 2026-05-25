@@ -30,9 +30,16 @@ DEFAULT_KAMERNET_PROPERTY_TYPE = "any"
 KAMERNET_PROPERTY_TYPE_DONE = "Done"
 KAMERNET_PROPERTY_TYPE_CLEAR = "Clear selection"
 KAMERNET_PROPERTY_TYPE_CHOICES = {
-    label: key
+    label.casefold(): key
     for key, label in KAMERNET_PROPERTY_TYPE_LABELS.items()
 }
+KAMERNET_PROPERTY_TYPE_CHOICES.update(
+    {
+        key.replace("_", " ").casefold(): key
+        for key in KAMERNET_PROPERTY_TYPE_LABELS
+    }
+)
+KAMERNET_PROPERTY_TYPE_OPTIONS_TEXT = ", ".join(KAMERNET_PROPERTY_TYPE_LABELS.values())
 
 
 def create_application() -> Application:
@@ -51,6 +58,7 @@ def create_application() -> Application:
 
     search_conversation = ConversationHandler(
         entry_points=[CommandHandler("search", cmd_search)],
+        allow_reentry=True,
         states={
             ASK_PROPERTY_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_property_type)],
             ASK_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_price)],
@@ -60,11 +68,14 @@ def create_application() -> Application:
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
     app.add_handler(search_conversation)
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_error_handler(log_error)
 
     app.job_queue.run_repeating(
         scheduled_scan,
         interval=config.POLL_INTERVAL_SECONDS,
         first=20,
+        job_kwargs={"coalesce": True, "max_instances": 1},
     )
 
     return app
@@ -86,6 +97,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _ensure_authorized(update):
         return
 
+    logger.info("/start from chat %s", update.effective_chat.id)
     await update.message.reply_text(
         "Amsterdam House Bot is running.\n\n"
         "Commands:\n"
@@ -118,6 +130,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     chat_id = update.effective_chat.id
     previous_filters = await db.get_filters(chat_id)
+    logger.info("/search from chat %s", chat_id)
     context.user_data.clear()
     context.user_data["had_filters"] = previous_filters is not None
     context.user_data["previous_active"] = (
@@ -145,14 +158,15 @@ async def receive_property_type(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
 
     choice = (update.message.text or "").strip()
-    if choice == KAMERNET_PROPERTY_TYPE_DONE:
+    logger.info("Received property type choice from chat %s: %s", update.effective_chat.id, choice)
+    if choice.casefold() == KAMERNET_PROPERTY_TYPE_DONE.casefold():
         selected_types = context.user_data.get("kamernet_property_types", [])
         context.user_data["kamernet_property_type"] = serialize_kamernet_property_types(
             selected_types or DEFAULT_KAMERNET_PROPERTY_TYPE
         )
         return await _ask_price(update)
 
-    if choice == KAMERNET_PROPERTY_TYPE_CLEAR:
+    if choice.casefold() == KAMERNET_PROPERTY_TYPE_CLEAR.casefold():
         context.user_data["kamernet_property_types"] = []
         await update.message.reply_text(
             "Selection cleared. Choose property types, or tap Done for Any property type.",
@@ -168,7 +182,8 @@ async def receive_property_type(update: Update, context: ContextTypes.DEFAULT_TY
     property_types, invalid_choices = _parse_property_type_choices(choice)
     if invalid_choices:
         await update.message.reply_text(
-            "Please choose property types from the menu, or type labels separated by commas."
+            "Choose or type property types separated by commas:\n"
+            f"{KAMERNET_PROPERTY_TYPE_OPTIONS_TEXT}"
         )
         return ASK_PROPERTY_TYPE
 
@@ -275,12 +290,20 @@ async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _ensure_authorized(update):
         return
 
+    if not await db.get_filters(update.effective_chat.id):
+        await update.message.reply_text("No filters configured. Use /search.")
+        return
+
     await db.set_active(update.effective_chat.id, False)
     await update.message.reply_text("Notifications paused. Use /resume to resume.")
 
 
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _ensure_authorized(update):
+        return
+
+    if not await db.get_filters(update.effective_chat.id):
+        await update.message.reply_text("Set your filters first with /search.")
         return
 
     await db.set_active(update.effective_chat.id, True)
@@ -316,6 +339,10 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("No new matching listings found at the moment.")
     else:
         await update.message.reply_text(f"Sent {count} new matching listings.")
+
+
+async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Telegram handler failed for update %s", update, exc_info=context.error)
 
 
 def _is_authorized(update: Update) -> bool:
@@ -376,7 +403,7 @@ def _parse_property_type_choices(text: str | None) -> tuple[list[str], list[str]
         return [], [""]
 
     label_lookup = {
-        " ".join(label.split()).lower(): key
+        " ".join(label.split()).casefold(): key
         for label, key in KAMERNET_PROPERTY_TYPE_CHOICES.items()
     }
     parts = []
@@ -388,7 +415,7 @@ def _parse_property_type_choices(text: str | None) -> tuple[list[str], list[str]
     property_types: list[str] = []
     invalid_choices: list[str] = []
     for label in parts:
-        property_type = label_lookup.get(label.lower())
+        property_type = label_lookup.get(label.casefold())
         if property_type is None:
             invalid_choices.append(label)
         elif property_type not in property_types:

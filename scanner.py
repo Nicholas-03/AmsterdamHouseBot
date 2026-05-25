@@ -120,24 +120,25 @@ async def _send_notification(bot: Bot, chat_id: int, listing) -> None:
 
     text = f"<b>New on {escape(source)}</b>\n\n" + "\n".join(parts)
 
-    try:
-        if listing.image_url:
+    if listing.image_url:
+        try:
             await bot.send_photo(
                 chat_id=chat_id,
                 photo=listing.image_url,
                 caption=text,
                 parse_mode=ParseMode.HTML,
             )
-        else:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=False,
-            )
+            return
+        except Exception as exc:
+            logger.warning("Photo send failed (%s), retrying as text: %s", chat_id, exc)
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=False,
+        )
     except Exception as exc:
-        logger.warning("Photo send failed (%s), retrying as text: %s", chat_id, exc)
-        try:
-            await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
-        except Exception as exc2:
-            logger.error("Notification failed for %s: %s", chat_id, exc2)
+        logger.error("Notification failed for %s: %s", chat_id, exc)
+        raise

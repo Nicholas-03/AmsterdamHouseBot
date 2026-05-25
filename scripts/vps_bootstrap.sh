@@ -119,6 +119,7 @@ awk '!/^[[:space:]]*DB_PATH[[:space:]]*=/' "${UPLOADED_ENV}" > "${SANITIZED_ENV}
 install -m 0640 -o root -g "${SERVICE_USER}" "${SANITIZED_ENV}" "${ENV_FILE}"
 rm -f "${SANITIZED_ENV}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${DATA_DIR}"
+chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${SERVICE_HOME}/.cache"
 
 cd "${APP_DIR}"
