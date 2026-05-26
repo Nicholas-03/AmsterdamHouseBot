@@ -116,6 +116,7 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(scanner.db, "get_auto_reply", AsyncMock(return_value=None)),
             patch.object(scanner.db, "mark_auto_reply_result", mark_result),
+            patch.object(scanner.db, "log_event", AsyncMock()),
             patch.object(scanner, "KamernetReplier", FakeReplier),
         ):
             attempted = await scanner._maybe_auto_reply_to_listing(
@@ -143,6 +144,7 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
                 AsyncMock(return_value={"status": "sent", "dry_run": False}),
             ),
             patch.object(scanner.db, "mark_auto_reply_result", mark_result),
+            patch.object(scanner.db, "log_event", AsyncMock()),
             patch.object(scanner, "KamernetReplier", FakeReplier),
         ):
             attempted = await scanner._maybe_auto_reply_to_listing(
@@ -164,6 +166,7 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(scanner.db, "get_auto_reply", AsyncMock(return_value=None)),
             patch.object(scanner.db, "mark_auto_reply_result", AsyncMock()),
+            patch.object(scanner.db, "log_event", AsyncMock()),
         ):
             attempted = await scanner._maybe_auto_reply_to_listing(
                 123,
@@ -187,6 +190,7 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(scanner.db, "get_auto_reply", AsyncMock(return_value=None)),
             patch.object(scanner.db, "mark_auto_reply_result", AsyncMock()),
+            patch.object(scanner.db, "log_event", AsyncMock()),
         ):
             attempted = await scanner._maybe_auto_reply_to_listing(
                 123,
@@ -211,6 +215,7 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(scanner.db, "get_auto_reply", AsyncMock(return_value=None)),
             patch.object(scanner.db, "mark_auto_reply_result", AsyncMock()),
+            patch.object(scanner.db, "log_event", AsyncMock()),
         ):
             attempted = await scanner._maybe_auto_reply_to_listing(
                 123,

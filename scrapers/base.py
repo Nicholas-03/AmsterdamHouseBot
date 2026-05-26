@@ -36,6 +36,7 @@ class BaseScraper(ABC):
         self.max_price = max_price
         self.min_bedrooms = min_bedrooms
         self.min_size_m2 = min_size_m2
+        self.last_error = ""
 
     @abstractmethod
     async def scrape(self) -> list[Listing]:

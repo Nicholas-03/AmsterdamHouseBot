@@ -54,6 +54,7 @@ class HuurwoningenScraper(BaseScraper):
         return url
 
     async def scrape(self) -> list[Listing]:
+        self.last_error = ""
         try:
             await asyncio.sleep(random.uniform(1.0, 3.0))
             url = self._build_url()
@@ -77,6 +78,7 @@ class HuurwoningenScraper(BaseScraper):
             logger.info("Huurwoningen: found %d matching listings from %s", len(listings), url)
             return listings
         except Exception as exc:
+            self.last_error = str(exc)
             logger.error("Huurwoningen scrape error: %s", exc)
             return []
 

@@ -1,9 +1,16 @@
 import json
+import logging
 
 import aiosqlite
 
 from config import DB_PATH
 from scrapers.kamernet import serialize_kamernet_property_types
+
+logger = logging.getLogger(__name__)
+
+BOT_EVENT_RETENTION_DAYS = 3
+_BOT_EVENT_TEXT_LIMIT = 2000
+_BOT_EVENT_DATA_LIMIT = 4000
 
 
 async def init_db():
@@ -76,6 +83,24 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS bot_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                level       TEXT NOT NULL DEFAULT 'info',
+                event_type  TEXT NOT NULL,
+                chat_id     INTEGER,
+                source      TEXT,
+                listing_id  TEXT,
+                title       TEXT,
+                status      TEXT,
+                detail      TEXT,
+                data_json   TEXT
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_bot_events_created_at ON bot_events(created_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_bot_events_listing ON bot_events(source, listing_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_bot_events_chat ON bot_events(chat_id)")
+        await db.execute("""
             INSERT OR IGNORE INTO auto_replies (
                 source, listing_id, url, triggered_by_chat_id, status, dry_run, error, attempted_at, sent_at, updated_at
             )
@@ -94,6 +119,7 @@ async def init_db():
                 SET auto_reply_enabled = kamernet_auto_reply
                 WHERE auto_reply_enabled = 0 AND kamernet_auto_reply = 1
             """)
+        await _prune_bot_events(db)
         await db.commit()
 
 
@@ -219,6 +245,107 @@ async def set_setup_in_progress(chat_id: int, setup_in_progress: bool) -> None:
             (int(setup_in_progress), chat_id),
         )
         await db.commit()
+
+
+async def log_event(
+    event_type: str,
+    *,
+    level: str = "info",
+    chat_id: int | None = None,
+    source: str | None = None,
+    listing_id: str | None = None,
+    title: str = "",
+    status: str = "",
+    detail: str = "",
+    data: dict | None = None,
+) -> None:
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await _insert_bot_event(
+                db,
+                event_type,
+                level=level,
+                chat_id=chat_id,
+                source=source,
+                listing_id=listing_id,
+                title=title,
+                status=status,
+                detail=detail,
+                data=data,
+            )
+            await db.commit()
+    except Exception as exc:
+        logger.warning("Could not write bot event %s: %s", event_type, exc)
+
+
+async def prune_bot_events() -> None:
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await _prune_bot_events(db)
+            await db.commit()
+    except Exception as exc:
+        logger.warning("Could not prune bot events: %s", exc)
+
+
+async def get_recent_bot_events(limit: int = 50) -> list[dict]:
+    limit = max(1, min(limit, 200))
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT *
+            FROM bot_events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def _insert_bot_event(
+    db: aiosqlite.Connection,
+    event_type: str,
+    *,
+    level: str,
+    chat_id: int | None,
+    source: str | None,
+    listing_id: str | None,
+    title: str,
+    status: str,
+    detail: str,
+    data: dict | None,
+) -> None:
+    data_json = ""
+    if data:
+        data_json = json.dumps(data, ensure_ascii=True, default=str)[:_BOT_EVENT_DATA_LIMIT]
+    await db.execute(
+        """
+        INSERT INTO bot_events (
+            level, event_type, chat_id, source, listing_id, title, status, detail, data_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            level[:20],
+            event_type[:80],
+            chat_id,
+            source,
+            listing_id,
+            title[:300],
+            status[:100],
+            detail[:_BOT_EVENT_TEXT_LIMIT],
+            data_json,
+        ),
+    )
+
+
+async def _prune_bot_events(db: aiosqlite.Connection) -> None:
+    await db.execute(
+        "DELETE FROM bot_events WHERE created_at < datetime('now', ?)",
+        (f"-{BOT_EVENT_RETENTION_DAYS} days",),
+    )
 
 
 async def set_auto_reply(chat_id: int, enabled: bool) -> None:

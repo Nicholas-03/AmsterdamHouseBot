@@ -42,6 +42,20 @@ _FILTER_MATCH_KEYS = (
 
 async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool = True) -> int:
     chat_id = user_filters["chat_id"]
+    await db.log_event(
+        "scan_user_started",
+        chat_id=chat_id,
+        status="started",
+        data={
+            "require_active": require_active,
+            "city": user_filters.get("city"),
+            "max_price": user_filters.get("max_price"),
+            "min_bedrooms": user_filters.get("min_bedrooms"),
+            "min_size_m2": user_filters.get("min_size_m2"),
+            "kamernet_property_type": user_filters.get("kamernet_property_type"),
+            "auto_reply_enabled": user_filters.get("auto_reply_enabled"),
+        },
+    )
     kamernet_reply_settings = KamernetReplySettings.from_config()
     kamernet_reply_settings_error = kamernet_reply_settings.ready_error()
     funda_reply_settings = FundaReplySettings.from_config()
@@ -51,10 +65,34 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
     if user_filters.get("auto_reply_enabled"):
         if kamernet_reply_settings.enabled and kamernet_reply_settings_error:
             logger.warning("Kamernet auto-reply is unavailable for this scan: %s", kamernet_reply_settings_error)
+            await db.log_event(
+                "auto_reply_settings_unavailable",
+                level="warning",
+                chat_id=chat_id,
+                source=KamernetScraper.SOURCE,
+                status="not_ready",
+                detail=kamernet_reply_settings_error,
+            )
         if funda_reply_settings.enabled and funda_reply_settings_error:
             logger.warning("Funda auto-reply is unavailable for this scan: %s", funda_reply_settings_error)
+            await db.log_event(
+                "auto_reply_settings_unavailable",
+                level="warning",
+                chat_id=chat_id,
+                source=FundaScraper.SOURCE,
+                status="not_ready",
+                detail=funda_reply_settings_error,
+            )
         if roofz_reply_settings.enabled and roofz_reply_settings_error:
             logger.warning("Roofz auto-reply is unavailable for this scan: %s", roofz_reply_settings_error)
+            await db.log_event(
+                "auto_reply_settings_unavailable",
+                level="warning",
+                chat_id=chat_id,
+                source=RoofzScraper.SOURCE,
+                status="not_ready",
+                detail=roofz_reply_settings_error,
+            )
 
     scrapers = [
         ParariusScraper(
@@ -100,18 +138,45 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
         try:
             if not await _scan_is_current(chat_id, user_filters, require_active):
                 logger.info("Scan stopped for user %s because filters changed or setup is open.", chat_id)
+                await db.log_event(
+                    "scan_user_stopped",
+                    level="warning",
+                    chat_id=chat_id,
+                    status="stale_before_scraper",
+                    detail="Filters changed, notifications paused, or setup is open.",
+                )
                 return new_count
 
+            await db.log_event("scraper_started", chat_id=chat_id, source=scraper.SOURCE, status="started")
             listings = await scraper.scrape()
             new_from_scraper = 0
             for listing in listings:
                 if not await _scan_is_current(chat_id, user_filters, require_active):
                     logger.info("Scan stopped for user %s before sending stale results.", chat_id)
+                    await db.log_event(
+                        "scan_user_stopped",
+                        level="warning",
+                        chat_id=chat_id,
+                        source=listing.source,
+                        listing_id=listing.id,
+                        title=listing.title,
+                        status="stale_before_notification",
+                        detail="Filters changed, notifications paused, or setup is open.",
+                    )
                     return new_count
 
                 if await db.was_sent(chat_id, listing.source, listing.id):
                     continue
                 await db.mark_seen(listing.source, listing.id, listing.url, listing.title, listing.price)
+                await db.log_event(
+                    "listing_new",
+                    chat_id=chat_id,
+                    source=listing.source,
+                    listing_id=listing.id,
+                    title=listing.title,
+                    status="new",
+                    data={"price": listing.price, "url": listing.url},
+                )
                 await _send_notification(bot, chat_id, listing)
                 await db.mark_sent(chat_id, listing.source, listing.id)
                 if user_filters.get("auto_reply_enabled"):
@@ -157,6 +222,15 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                         )
                         if attempted:
                             reply_attempts[RoofzScraper.SOURCE] += 1
+                elif listing.source in {KamernetScraper.SOURCE, FundaScraper.SOURCE, RoofzScraper.SOURCE}:
+                    await db.log_event(
+                        "auto_reply_user_disabled",
+                        chat_id=chat_id,
+                        source=listing.source,
+                        listing_id=listing.id,
+                        title=listing.title,
+                        status="skipped",
+                    )
                 new_count += 1
                 new_from_scraper += 1
             logger.info(
@@ -166,9 +240,42 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                 new_from_scraper,
                 chat_id,
             )
+            scrape_error = getattr(scraper, "last_error", "")
+            if scrape_error:
+                await db.log_event(
+                    "scraper_failed",
+                    level="error",
+                    chat_id=chat_id,
+                    source=scraper.SOURCE,
+                    status="error",
+                    detail=scrape_error,
+                    data={"listing_count": len(listings), "new_count": new_from_scraper},
+                )
+            else:
+                await db.log_event(
+                    "scraper_finished",
+                    chat_id=chat_id,
+                    source=scraper.SOURCE,
+                    status="ok",
+                    data={"listing_count": len(listings), "new_count": new_from_scraper},
+                )
         except Exception as exc:
             logger.error("Scraper %s failed for user %s: %s", scraper.SOURCE, chat_id, exc)
+            await db.log_event(
+                "scraper_failed",
+                level="error",
+                chat_id=chat_id,
+                source=scraper.SOURCE,
+                status="error",
+                detail=str(exc),
+            )
 
+    await db.log_event(
+        "scan_user_finished",
+        chat_id=chat_id,
+        status="finished",
+        data={"new_count": new_count, "reply_attempts": reply_attempts},
+    )
     return new_count
 
 
@@ -184,8 +291,26 @@ async def _maybe_auto_reply_to_listing(
     bot: Bot | None = None,
 ) -> bool:
     if not settings.enabled:
+        await db.log_event(
+            "auto_reply_source_disabled",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status="skipped",
+        )
         return False
     if settings_error:
+        await db.log_event(
+            "auto_reply_settings_unavailable",
+            level="warning",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status="skipped",
+            detail=settings_error,
+        )
         return False
     if settings.max_per_scan and attempts_so_far >= settings.max_per_scan:
         logger.info(
@@ -193,6 +318,15 @@ async def _maybe_auto_reply_to_listing(
             source_label,
             attempts_so_far,
             settings.max_per_scan,
+        )
+        await db.log_event(
+            "auto_reply_cap_reached",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status="skipped",
+            data={"attempts_so_far": attempts_so_far, "max_per_scan": settings.max_per_scan},
         )
         return False
 
@@ -204,8 +338,26 @@ async def _maybe_auto_reply_to_listing(
             listing.id,
             existing_reply["status"],
         )
+        await db.log_event(
+            "auto_reply_skipped_existing",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status=existing_reply["status"],
+            data={"dry_run": existing_reply["dry_run"]},
+        )
         return False
 
+    await db.log_event(
+        "auto_reply_attempting",
+        chat_id=chat_id,
+        source=listing.source,
+        listing_id=listing.id,
+        title=listing.title,
+        status="attempting",
+        data={"dry_run": settings.dry_run},
+    )
     await db.mark_auto_reply_result(
         listing.source,
         listing.id,
@@ -238,6 +390,17 @@ async def _maybe_auto_reply_to_listing(
         result.status,
         result.detail,
     )
+    await db.log_event(
+        "auto_reply_result",
+        level="info" if result.status in _AUTO_REPLY_OK_STATUSES else "warning",
+        chat_id=chat_id,
+        source=listing.source,
+        listing_id=listing.id,
+        title=listing.title,
+        status=result.status,
+        detail=result.detail,
+        data={"dry_run": settings.dry_run},
+    )
     if bot and _should_warn_auto_reply(result.status, settings.dry_run):
         await bot.send_message(
             chat_id=chat_id,
@@ -248,6 +411,16 @@ async def _maybe_auto_reply_to_listing(
                 f"Listing: {listing.url}"
             ),
             disable_web_page_preview=True,
+        )
+        await db.log_event(
+            "auto_reply_warning_sent",
+            level="warning",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status=result.status,
+            detail=result.detail,
         )
     return True
 
@@ -293,9 +466,27 @@ async def _send_notification(bot: Bot, chat_id: int, listing) -> None:
                 caption=text,
                 parse_mode=ParseMode.HTML,
             )
+            await db.log_event(
+                "notification_sent",
+                chat_id=chat_id,
+                source=listing.source,
+                listing_id=listing.id,
+                title=listing.title,
+                status="photo_sent",
+            )
             return
         except Exception as exc:
             logger.warning("Photo send failed (%s), retrying as text: %s", chat_id, exc)
+            await db.log_event(
+                "notification_photo_failed",
+                level="warning",
+                chat_id=chat_id,
+                source=listing.source,
+                listing_id=listing.id,
+                title=listing.title,
+                status="retrying_text",
+                detail=str(exc),
+            )
 
     try:
         await bot.send_message(
@@ -304,6 +495,24 @@ async def _send_notification(bot: Bot, chat_id: int, listing) -> None:
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=False,
         )
+        await db.log_event(
+            "notification_sent",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status="message_sent",
+        )
     except Exception as exc:
         logger.error("Notification failed for %s: %s", chat_id, exc)
+        await db.log_event(
+            "notification_failed",
+            level="error",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status="error",
+            detail=str(exc),
+        )
         raise

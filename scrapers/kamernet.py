@@ -88,6 +88,7 @@ class KamernetScraper(BaseScraper):
         return f"{self.BASE_URL}/en/for-rent/properties-{city_slug}?{urlencode(params)}"
 
     async def scrape(self) -> list[Listing]:
+        self.last_error = ""
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
                 await asyncio.sleep(random.uniform(2.0, 4.0))
@@ -112,6 +113,7 @@ class KamernetScraper(BaseScraper):
             )
             return listings
         except Exception as exc:
+            self.last_error = str(exc)
             logger.error("Kamernet scrape error: %s", exc)
             return []
 

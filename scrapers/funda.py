@@ -13,10 +13,12 @@ class FundaScraper(BaseScraper):
     SOURCE = "funda"
 
     async def scrape(self) -> list[Listing]:
+        self.last_error = ""
         try:
             from funda import Funda
         except ImportError:
-            logger.error("Funda: pyfunda is not installed. Run: uv sync --locked")
+            self.last_error = "pyfunda is not installed. Run: uv sync --locked"
+            logger.error("Funda: %s", self.last_error)
             return []
 
         try:
@@ -26,6 +28,7 @@ class FundaScraper(BaseScraper):
             logger.info("Funda: found %d matching listings", len(listings))
             return listings
         except Exception as exc:
+            self.last_error = str(exc)
             logger.error("Funda scrape error: %s", exc)
             return []
 

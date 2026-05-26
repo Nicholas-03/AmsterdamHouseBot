@@ -36,6 +36,7 @@ class ParariusScraper(BaseScraper):
         return f"{self.BASE_URL}/huurwoningen/{city_slug}{price_segment}"
 
     async def scrape(self) -> list[Listing]:
+        self.last_error = ""
         try:
             await asyncio.sleep(random.uniform(1.0, 3.0))
             if _USE_CURL:
@@ -58,6 +59,7 @@ class ParariusScraper(BaseScraper):
             logger.info("Pararius: found %d matching listings", len(listings))
             return listings
         except Exception as exc:
+            self.last_error = str(exc)
             logger.error("Pararius scrape error: %s", exc)
             return []
 

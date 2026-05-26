@@ -19,6 +19,7 @@ The bot stores user filters and already-seen listings in SQLite, so duplicate li
 - Lets each Telegram user toggle Kamernet/Funda/Roofz auto-replies on or off
 - Sends new listings directly in Telegram
 - Supports an on-demand scan with `/test`
+- Stores operational events in SQLite and keeps the last 3 days for debugging
 
 ## Prerequisites
 
@@ -169,6 +170,7 @@ After that, the scheduled scanner will keep running in the background while the 
 - `/search` - save or update filters
 - `/filters` - show current filters
 - `/autoreply on|off|status` - control Kamernet/Funda/Roofz auto-replies
+- `/logs` - show recent operational events from the SQLite event log
 - `/test` - run a scan immediately
 - `/pause` - pause notifications
 - `/resume` - resume notifications
@@ -180,11 +182,13 @@ After that, the scheduled scanner will keep running in the background while the 
 1. `main.py` starts the Telegram application.
 2. `bot.py` registers commands and schedules the recurring scan job.
 3. `scanner.py` runs all scrapers for each active user.
-4. `db.py` stores filters and deduplicates listings in SQLite.
+4. `db.py` stores filters, deduplicates listings, records operational events, and prunes event rows older than 3 days.
 
 ## Auto-Reply
 
 Auto-reply needs both server setup and a Telegram toggle. Each source has its own server-side flag, and the user must send `/autoreply on`. When enabled, it only runs after a new listing has already matched your filters and the Telegram notification has been sent. It records attempts in SQLite so the same listing is not answered twice, even if multiple Telegram users match it.
+
+Operational event logging writes scan starts/finishes, scraper results, new listings, notification sends, auto-reply decisions, auto-reply results, and Telegram warnings into the `bot_events` table. Use `/logs` in Telegram for a quick recent view, or inspect the SQLite table directly on the VPS. Rows older than 3 days are pruned on startup and scheduled scans.
 
 Keep tokens, passwords, personal form data, and reply messages in `.env`. Do not commit real `.env` files, saved browser sessions, local databases, or reply-message text files. For VPS deployment, prefer inline `KAMERNET_REPLY_MESSAGE`, `FUNDA_REPLY_MESSAGE`, and `ROOFZ_REPLY_MESSAGE` values in `.env`; local `*_REPLY_MESSAGE_FILE` paths are not uploaded by the deploy script.
 

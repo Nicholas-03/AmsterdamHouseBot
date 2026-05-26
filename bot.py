@@ -49,6 +49,7 @@ def create_application() -> Application:
     async def _post_init(app: Application) -> None:
         await db.init_db()
         logger.info("Database initialized.")
+        await db.log_event("bot_started", status="started")
 
     app = Application.builder().token(config.TELEGRAM_TOKEN).post_init(_post_init).build()
 
@@ -56,6 +57,7 @@ def create_application() -> Application:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("filters", cmd_filters))
     app.add_handler(CommandHandler("autoreply", cmd_autoreply))
+    app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("pause", cmd_pause))
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("test", cmd_test))
@@ -87,15 +89,25 @@ def create_application() -> Application:
 
 
 async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await db.prune_bot_events()
     users = await db.get_all_active_users()
     if config.TELEGRAM_ALLOWED_CHAT_IDS:
         users = [user for user in users if user["chat_id"] in config.TELEGRAM_ALLOWED_CHAT_IDS]
     logger.info("Scheduled scan: %d active users.", len(users))
+    await db.log_event("scheduled_scan_started", status="started", data={"active_users": len(users)})
     for user in users:
         try:
             await run_scan_for_user(context.bot, user)
         except Exception as exc:
             logger.error("Scan error for user %s: %s", user["chat_id"], exc)
+            await db.log_event(
+                "scheduled_scan_user_failed",
+                level="error",
+                chat_id=user["chat_id"],
+                status="error",
+                detail=str(exc),
+            )
+    await db.log_event("scheduled_scan_finished", status="finished", data={"active_users": len(users)})
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -103,6 +115,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     logger.info("/start from chat %s", update.effective_chat.id)
+    await db.log_event("telegram_command", chat_id=update.effective_chat.id, status="/start")
     await _send_help(update)
 
 
@@ -111,6 +124,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     logger.info("/help from chat %s", update.effective_chat.id)
+    await db.log_event("telegram_command", chat_id=update.effective_chat.id, status="/help")
     await _send_help(update)
 
 
@@ -119,6 +133,7 @@ async def cmd_filters(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     user_filters = await db.get_filters(update.effective_chat.id)
+    await db.log_event("telegram_command", chat_id=update.effective_chat.id, status="/filters")
     if not user_filters:
         await update.message.reply_text("No filters configured. Use /search.")
         return
@@ -131,6 +146,7 @@ async def cmd_autoreply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     chat_id = update.effective_chat.id
+    await db.log_event("telegram_command", chat_id=chat_id, status="/autoreply")
     user_filters = await db.get_filters(chat_id)
     if not user_filters:
         await update.message.reply_text("Set your filters first with /search.")
@@ -143,6 +159,7 @@ async def cmd_autoreply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if arg in {"off", "disable", "disabled", "stop"}:
         await db.set_auto_reply(chat_id, False)
+        await db.log_event("auto_reply_toggle_changed", chat_id=chat_id, status="off")
         await update.message.reply_text(
             "Auto-reply is off. I will still send matching listings in Telegram."
         )
@@ -159,6 +176,7 @@ async def cmd_autoreply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         await db.set_auto_reply(chat_id, True)
+        await db.log_event("auto_reply_toggle_changed", chat_id=chat_id, status="on")
         await update.message.reply_text(
             "Auto-reply is on for sources that are ready on the server.\n"
             + "\n".join(_format_source_status(label, error) for label, error in status)
@@ -170,6 +188,22 @@ async def cmd_autoreply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text("Use /autoreply on, /autoreply off, or /autoreply status.")
 
 
+async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _ensure_authorized(update):
+        return
+
+    await db.log_event("telegram_command", chat_id=update.effective_chat.id, status="/logs")
+    events = await db.get_recent_bot_events(limit=15)
+    if not events:
+        await update.message.reply_text("No bot events in the last 3 days.")
+        return
+
+    lines = ["Recent bot events:"]
+    for event in reversed(events[:10]):
+        lines.append(_format_event_line(event))
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await _ensure_authorized(update):
         return ConversationHandler.END
@@ -177,6 +211,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
     previous_filters = await db.get_filters(chat_id)
     logger.info("/search from chat %s", chat_id)
+    await db.log_event("telegram_command", chat_id=chat_id, status="/search")
     context.user_data.clear()
     context.user_data["had_filters"] = previous_filters is not None
     context.user_data["previous_active"] = (
@@ -184,6 +219,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     if previous_filters:
         await db.set_setup_in_progress(chat_id, True)
+        await db.log_event("search_setup_started", chat_id=chat_id, status="editing_existing_filters")
 
     await update.message.reply_text(
         "Kamernet property types?\n"
@@ -317,6 +353,18 @@ async def receive_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data.clear()
 
     saved_filters = await db.get_filters(chat_id)
+    await db.log_event(
+        "filters_saved",
+        chat_id=chat_id,
+        status="saved",
+        data={
+            "max_price": saved_filters["max_price"],
+            "min_bedrooms": saved_filters["min_bedrooms"],
+            "min_size_m2": saved_filters["min_size_m2"],
+            "kamernet_property_type": saved_filters["kamernet_property_type"],
+            "active": saved_filters["active"],
+        },
+    )
     await update.message.reply_text("Filters saved.\n\n" + _format_filters(saved_filters))
     return ConversationHandler.END
 
@@ -328,6 +376,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if context.user_data.get("had_filters"):
         await db.set_setup_in_progress(update.effective_chat.id, False)
     context.user_data.clear()
+    await db.log_event("search_setup_cancelled", chat_id=update.effective_chat.id, status="cancelled")
     await update.message.reply_text("Search setup cancelled.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
@@ -341,6 +390,7 @@ async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await db.set_active(update.effective_chat.id, False)
+    await db.log_event("notifications_paused", chat_id=update.effective_chat.id, status="paused")
     await update.message.reply_text("Notifications paused. Use /resume to resume.")
 
 
@@ -353,6 +403,7 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     await db.set_active(update.effective_chat.id, True)
+    await db.log_event("notifications_resumed", chat_id=update.effective_chat.id, status="active")
     await update.message.reply_text("Notifications resumed.")
 
 
@@ -361,6 +412,7 @@ async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await db.clear_seen()
+    await db.log_event("seen_listings_cleared", chat_id=update.effective_chat.id, level="warning", status="cleared")
     await update.message.reply_text(
         "Seen and sent listings were cleared. The next scan will treat matching listings as new."
     )
@@ -380,7 +432,9 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text("Searching for listings now...")
+    await db.log_event("manual_scan_started", chat_id=chat_id, status="started")
     count = await run_scan_for_user(context.bot, user_filters, require_active=False)
+    await db.log_event("manual_scan_finished", chat_id=chat_id, status="finished", data={"new_count": count})
     if count == 0:
         await update.message.reply_text("No new matching listings found at the moment.")
     else:
@@ -389,6 +443,7 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.exception("Telegram handler failed for update %s", update, exc_info=context.error)
+    await db.log_event("telegram_handler_failed", level="error", status="error", detail=str(context.error))
 
 
 def _is_authorized(update: Update) -> bool:
@@ -405,6 +460,12 @@ async def _ensure_authorized(update: Update) -> bool:
 
     chat_id = update.effective_chat.id if update.effective_chat else "unknown"
     logger.warning("Unauthorized Telegram chat attempted to use the bot: %s", chat_id)
+    await db.log_event(
+        "telegram_unauthorized",
+        level="warning",
+        chat_id=chat_id if isinstance(chat_id, int) else None,
+        status="blocked",
+    )
     if update.message:
         await update.message.reply_text(
             "This is a private bot.\n"
@@ -488,6 +549,7 @@ async def _send_help(update: Update) -> None:
         "/search - set Kamernet property types, rent, bedrooms, and size filters\n"
         "/filters - show active filters\n"
         "/autoreply on|off|status - control Kamernet/Funda/Roofz auto-replies\n"
+        "/logs - show recent operational events\n"
         "/test - scan now\n"
         "/pause - pause notifications\n"
         "/resume - resume notifications\n"
@@ -555,3 +617,17 @@ def _auto_reply_source_status() -> list[tuple[str, str | None]]:
 
 def _format_source_status(label: str, error: str | None) -> str:
     return f"{label}: {'Ready' if error is None else 'Not ready - ' + error}"
+
+
+def _format_event_line(event: dict) -> str:
+    created_at = str(event.get("created_at", ""))[5:19]
+    pieces = [created_at, event.get("event_type", "event")]
+    if event.get("source"):
+        pieces.append(str(event["source"]))
+    if event.get("listing_id"):
+        pieces.append(str(event["listing_id"]))
+    if event.get("status"):
+        pieces.append(str(event["status"]))
+    if event.get("title"):
+        pieces.append(str(event["title"])[:40])
+    return " | ".join(piece for piece in pieces if piece)

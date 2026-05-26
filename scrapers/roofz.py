@@ -21,10 +21,12 @@ class RoofzScraper(BaseScraper):
         ]
 
     async def scrape(self) -> list[Listing]:
+        self.last_error = ""
         try:
             from playwright.async_api import async_playwright
         except ImportError:
-            logger.error("Roofz: playwright is not installed. Run: playwright install chromium")
+            self.last_error = "playwright is not installed. Run: playwright install chromium"
+            logger.error("Roofz: %s", self.last_error)
             return []
 
         await asyncio.sleep(random.uniform(1.0, 3.0))
@@ -45,6 +47,7 @@ class RoofzScraper(BaseScraper):
 
                 await browser.close()
         except Exception as exc:
+            self.last_error = str(exc)
             logger.error("Roofz scrape error: %s", exc)
             return []
 
