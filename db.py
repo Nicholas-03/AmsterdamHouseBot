@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timezone
 
 import aiosqlite
 
@@ -76,8 +77,12 @@ async def init_db():
                 status      TEXT NOT NULL,
                 dry_run     INTEGER NOT NULL DEFAULT 1,
                 error       TEXT,
+                first_seen_at TIMESTAMP,
                 attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 sent_at     TIMESTAMP,
+                reply_latency_seconds REAL,
+                confirmation_at TIMESTAMP,
+                confirmation_latency_seconds REAL,
                 updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (source, listing_id)
             )
@@ -113,6 +118,10 @@ async def init_db():
         await _ensure_column(db, "user_filters", "kamernet_property_type", "TEXT DEFAULT 'any'")
         await _ensure_column(db, "user_filters", "auto_reply_enabled", "INTEGER DEFAULT 0")
         await _ensure_column(db, "user_filters", "setup_in_progress", "INTEGER DEFAULT 0")
+        await _ensure_column(db, "auto_replies", "first_seen_at", "TIMESTAMP")
+        await _ensure_column(db, "auto_replies", "reply_latency_seconds", "REAL")
+        await _ensure_column(db, "auto_replies", "confirmation_at", "TIMESTAMP")
+        await _ensure_column(db, "auto_replies", "confirmation_latency_seconds", "REAL")
         if await _has_column(db, "user_filters", "kamernet_auto_reply"):
             await db.execute("""
                 UPDATE user_filters
@@ -138,11 +147,35 @@ async def _has_column(db: aiosqlite.Connection, table: str, column: str) -> bool
 
 async def mark_seen(source: str, listing_id: str, url: str = "", title: str = "", price: str = ""):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
             "INSERT OR IGNORE INTO seen_listings (source, listing_id, url, title, price) VALUES (?,?,?,?,?)",
             (source, listing_id, url, title, price),
         )
+        inserted = cursor.rowcount > 0
+        async with db.execute(
+            """
+            SELECT source, listing_id, url, title, price, scraped_at
+            FROM seen_listings
+            WHERE source=? AND listing_id=?
+            """,
+            (source, listing_id),
+        ) as cur:
+            row = await cur.fetchone()
         await db.commit()
+        if not row:
+            return {
+                "source": source,
+                "listing_id": listing_id,
+                "url": url,
+                "title": title,
+                "price": price,
+                "scraped_at": "",
+                "inserted": inserted,
+            }
+        result = dict(row)
+        result["inserted"] = inserted
+        return result
 
 
 async def was_sent(chat_id: int, source: str, listing_id: str) -> bool:
@@ -438,8 +471,12 @@ async def get_auto_reply(source: str, listing_id: str) -> dict | None:
                 "status": row["status"],
                 "dry_run": bool(row["dry_run"]),
                 "error": row["error"],
+                "first_seen_at": row["first_seen_at"],
                 "attempted_at": row["attempted_at"],
                 "sent_at": row["sent_at"],
+                "reply_latency_seconds": row["reply_latency_seconds"],
+                "confirmation_at": row["confirmation_at"],
+                "confirmation_latency_seconds": row["confirmation_latency_seconds"],
                 "updated_at": row["updated_at"],
             }
 
@@ -452,6 +489,10 @@ async def mark_auto_reply_result(
     status: str,
     dry_run: bool,
     error: str = "",
+    *,
+    first_seen_at: str | datetime | None = None,
+    sent_at: str | datetime | None = None,
+    confirmation_at: str | datetime | None = None,
 ) -> None:
     sent_statuses = {
         "sent",
@@ -466,15 +507,24 @@ async def mark_auto_reply_result(
         "preapplication_sent",
         "preapplication_submitted_unconfirmed",
     }
+    first_seen_at_text = _format_timestamp(first_seen_at)
+    sent_at_text = _format_timestamp(sent_at)
+    confirmation_at_text = _format_timestamp(confirmation_at)
+    if not sent_at_text and status in sent_statuses:
+        sent_at_text = _format_timestamp(_utc_now())
+
+    reply_latency_seconds = _elapsed_seconds(first_seen_at_text, sent_at_text)
+    confirmation_latency_seconds = _elapsed_seconds(first_seen_at_text, confirmation_at_text)
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             INSERT INTO auto_replies (
-                source, listing_id, url, triggered_by_chat_id, status, dry_run, error, sent_at
+                source, listing_id, url, triggered_by_chat_id, status, dry_run, error,
+                first_seen_at, sent_at, reply_latency_seconds, confirmation_at, confirmation_latency_seconds
             )
             VALUES (
-                ?, ?, ?, ?, ?, ?, ?,
-                CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             ON CONFLICT(source, listing_id) DO UPDATE SET
                 url=excluded.url,
@@ -482,9 +532,25 @@ async def mark_auto_reply_result(
                 status=excluded.status,
                 dry_run=excluded.dry_run,
                 error=excluded.error,
+                first_seen_at=CASE
+                    WHEN auto_replies.first_seen_at IS NOT NULL THEN auto_replies.first_seen_at
+                    ELSE excluded.first_seen_at
+                END,
                 sent_at=CASE
                     WHEN excluded.sent_at IS NOT NULL THEN excluded.sent_at
                     ELSE auto_replies.sent_at
+                END,
+                reply_latency_seconds=CASE
+                    WHEN excluded.reply_latency_seconds IS NOT NULL THEN excluded.reply_latency_seconds
+                    ELSE auto_replies.reply_latency_seconds
+                END,
+                confirmation_at=CASE
+                    WHEN excluded.confirmation_at IS NOT NULL THEN excluded.confirmation_at
+                    ELSE auto_replies.confirmation_at
+                END,
+                confirmation_latency_seconds=CASE
+                    WHEN excluded.confirmation_latency_seconds IS NOT NULL THEN excluded.confirmation_latency_seconds
+                    ELSE auto_replies.confirmation_latency_seconds
                 END,
                 updated_at=CURRENT_TIMESTAMP
             """,
@@ -496,7 +562,57 @@ async def mark_auto_reply_result(
                 status,
                 int(dry_run),
                 error[:1000],
-                status in sent_statuses,
+                first_seen_at_text,
+                sent_at_text,
+                reply_latency_seconds,
+                confirmation_at_text,
+                confirmation_latency_seconds,
             ),
         )
         await db.commit()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _format_timestamp(value: str | datetime | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    value = value.astimezone(timezone.utc).replace(microsecond=0)
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_timestamp(value: str | datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        normalized = value.strip()
+        if not normalized:
+            return None
+        normalized = normalized.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            try:
+                parsed = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _elapsed_seconds(start: str | datetime | None, end: str | datetime | None) -> float | None:
+    start_dt = _parse_timestamp(start)
+    end_dt = _parse_timestamp(end)
+    if not start_dt or not end_dt:
+        return None
+    return max(0.0, round((end_dt - start_dt).total_seconds(), 3))

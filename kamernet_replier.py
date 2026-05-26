@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -114,6 +115,8 @@ class KamernetReplySettings:
 class KamernetReplyResult:
     status: str
     detail: str = ""
+    sent_at: datetime | None = None
+    confirmation_at: datetime | None = None
 
 
 def should_skip_existing_reply(existing_reply: dict | None, requested_dry_run: bool) -> bool:
@@ -321,9 +324,14 @@ class KamernetReplier:
             return KamernetReplyResult(
                 "sent",
                 f"Kamernet accepted the listing-reaction API request ({response.status_code}).",
+                sent_at=datetime.now(timezone.utc),
             )
         if response.status_code in {400, 409} and re.search(r"(already|conversation|sent)", detail, re.I):
-            return KamernetReplyResult("sent", "Kamernet API says this listing already has a conversation.")
+            return KamernetReplyResult(
+                "sent",
+                "Kamernet API says this listing already has a conversation.",
+                sent_at=datetime.now(timezone.utc),
+            )
         if response.status_code in {401, 403}:
             return KamernetReplyResult("api_auth_failed", f"{response.status_code}: {detail}")
         if response.status_code == 429:
@@ -405,14 +413,16 @@ class KamernetReplier:
 async def _click_browser_submit(page: Page, submit_button: Locator) -> KamernetReplyResult:
     await submit_button.click()
     await _wait_for_quiet(page)
+    sent_at = datetime.now(timezone.utc)
     body_text = await _body_text(page)
     if _SUCCESS_RE.search(body_text):
-        return KamernetReplyResult("sent", "Kamernet showed a send confirmation.")
+        return KamernetReplyResult("sent", "Kamernet showed a send confirmation.", sent_at=sent_at)
     if _SUBMIT_ERROR_RE.search(body_text):
         return KamernetReplyResult("submit_failed", "Kamernet showed an error after submit.")
     return KamernetReplyResult(
         "submitted_unconfirmed",
         "Submit was clicked, but no confirmation text was detected.",
+        sent_at=sent_at,
     )
 
 

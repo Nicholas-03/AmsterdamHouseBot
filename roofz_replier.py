@@ -130,6 +130,8 @@ class RoofzReplySettings:
 class RoofzReplyResult:
     status: str
     detail: str = ""
+    sent_at: datetime | None = None
+    confirmation_at: datetime | None = None
 
 
 class RoofzReplier:
@@ -159,7 +161,7 @@ class RoofzReplier:
         if not self.settings.preapplication_enabled:
             return response_result
 
-        return await self._complete_preapplication_from_mailtm(listing, started_at)
+        return await self._complete_preapplication_from_mailtm(listing, started_at, response_result.sent_at)
 
     async def _send_initial_interest(self, listing: Listing, payload: dict) -> RoofzReplyResult:
         headers = {
@@ -181,7 +183,11 @@ class RoofzReplier:
             return RoofzReplyResult("error", str(exc))
 
         if 200 <= response.status_code < 300:
-            return RoofzReplyResult("sent", f"Roofz accepted the contact request ({response.status_code}).")
+            return RoofzReplyResult(
+                "sent",
+                f"Roofz accepted the contact request ({response.status_code}).",
+                sent_at=datetime.now(timezone.utc),
+            )
 
         detail = response.text[:1000]
         if response.status_code == 400:
@@ -190,7 +196,12 @@ class RoofzReplier:
             return RoofzReplyResult("blocked", detail)
         return RoofzReplyResult("submit_failed", f"{response.status_code}: {detail}")
 
-    async def _complete_preapplication_from_mailtm(self, listing: Listing, started_at: datetime) -> RoofzReplyResult:
+    async def _complete_preapplication_from_mailtm(
+        self,
+        listing: Listing,
+        started_at: datetime,
+        initial_sent_at: datetime | None,
+    ) -> RoofzReplyResult:
         deadline = time.monotonic() + self.settings.preapplication_poll_seconds
         last_detail = "No matching unread Roofz pre-application email arrived yet."
         with MailTmClient(self.settings.mailtm) as mailtm:
@@ -210,21 +221,28 @@ class RoofzReplier:
                         return RoofzReplyResult(
                             "sent_preapplication_failed",
                             f"Initial contact was sent, but pre-application failed: {result.detail}",
+                            sent_at=initial_sent_at,
                         )
 
                     confirmation = await self._wait_for_confirmation(mailtm, listing, confirmation_started_at)
                     if confirmation:
-                        return RoofzReplyResult("preapplication_confirmed", "Roofz confirmation email arrived.")
+                        return RoofzReplyResult(
+                            "preapplication_confirmed",
+                            "Roofz confirmation email arrived.",
+                            sent_at=initial_sent_at,
+                            confirmation_at=confirmation.created_at or datetime.now(timezone.utc),
+                        )
                     return RoofzReplyResult(
                         "preapplication_confirmation_missing",
                         "Pre-application was submitted, but no confirmation email arrived in time.",
+                        sent_at=initial_sent_at,
                     )
 
                 if time.monotonic() >= deadline:
-                    return RoofzReplyResult("sent_preapplication_pending", last_detail)
+                    return RoofzReplyResult("sent_preapplication_pending", last_detail, sent_at=initial_sent_at)
                 await asyncio.sleep(self.settings.preapplication_poll_interval_seconds)
 
-    async def _wait_for_confirmation(self, mailtm: MailTmClient, listing: Listing, since: datetime) -> bool:
+    async def _wait_for_confirmation(self, mailtm: MailTmClient, listing: Listing, since: datetime):
         deadline = time.monotonic() + self.settings.preapplication_poll_seconds
         while True:
             messages = await asyncio.to_thread(
@@ -235,9 +253,9 @@ class RoofzReplier:
                 since,
             )
             if messages:
-                return True
+                return messages[0]
             if time.monotonic() >= deadline:
-                return False
+                return None
             await asyncio.sleep(self.settings.preapplication_poll_interval_seconds)
 
     async def complete_preapplication(self, application_url: str) -> RoofzReplyResult:
@@ -308,9 +326,14 @@ class RoofzReplier:
             return RoofzReplyResult(
                 "preapplication_sent",
                 f"Roofz OSRE accepted the pre-application API request ({response.status_code}).",
+                sent_at=datetime.now(timezone.utc),
             )
         if response.status_code in {400, 409} and re.search(r"(already|submitted|duplicate)", detail, re.I):
-            return RoofzReplyResult("preapplication_sent", "Roofz OSRE says the pre-application is already submitted.")
+            return RoofzReplyResult(
+                "preapplication_sent",
+                "Roofz OSRE says the pre-application is already submitted.",
+                sent_at=datetime.now(timezone.utc),
+            )
         if response.status_code == 400:
             return RoofzReplyResult("preapplication_validation_failed", detail)
         if response.status_code in {401, 403, 429}:
@@ -353,15 +376,21 @@ class RoofzReplier:
                             )
                         await final_button.click()
                         await _wait_for_quiet(page)
+                        sent_at = datetime.now(timezone.utc)
                         text = await _body_text(page)
                         if re.search(r"(thank you|submitted|application.*received|success|bedankt|verzonden|sent)", text, re.I):
                             return _with_api_context(
-                                RoofzReplyResult("preapplication_sent", "Roofz showed a pre-application confirmation."),
+                                RoofzReplyResult(
+                                    "preapplication_sent",
+                                    "Roofz showed a pre-application confirmation.",
+                                    sent_at=sent_at,
+                                ),
                                 api_result,
                             )
                         return RoofzReplyResult(
                             "preapplication_submitted_unconfirmed",
                             _with_api_detail("Submit was clicked, but no confirmation text was detected.", api_result),
+                            sent_at=sent_at,
                         )
 
                     continue_button = await _first_button(
@@ -557,7 +586,12 @@ def _parse_amount(value: str) -> int:
 
 
 def _with_api_context(result: RoofzReplyResult, api_result: RoofzReplyResult | None) -> RoofzReplyResult:
-    return RoofzReplyResult(result.status, _with_api_detail(result.detail, api_result))
+    return RoofzReplyResult(
+        result.status,
+        _with_api_detail(result.detail, api_result),
+        sent_at=result.sent_at,
+        confirmation_at=result.confirmation_at,
+    )
 
 
 def _with_api_detail(detail: str, api_result: RoofzReplyResult | None) -> str:

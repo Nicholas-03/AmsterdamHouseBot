@@ -113,6 +113,8 @@ class FundaReplySettings:
 class FundaReplyResult:
     status: str
     detail: str = ""
+    sent_at: datetime | None = None
+    confirmation_at: datetime | None = None
 
 
 class FundaReplier:
@@ -155,7 +157,7 @@ class FundaReplier:
         response_result = await self._send_contact_request(listing, url, office_id, headers, payload)
         if response_result.status != "sent" or not self.settings.confirmation.enabled:
             return response_result
-        return await self._wait_for_confirmation(listing, started_at)
+        return await self._wait_for_confirmation(listing, started_at, response_result.sent_at)
 
     async def _send_contact_request(
         self,
@@ -178,7 +180,11 @@ class FundaReplier:
             return FundaReplyResult("error", str(exc))
 
         if 200 <= response.status_code < 300:
-            return FundaReplyResult("sent", f"Funda accepted the contact request ({response.status_code}).")
+            return FundaReplyResult(
+                "sent",
+                f"Funda accepted the contact request ({response.status_code}).",
+                sent_at=datetime.now(timezone.utc),
+            )
 
         detail = response.text[:1000]
         if response.status_code == 400:
@@ -187,7 +193,12 @@ class FundaReplier:
             return FundaReplyResult("blocked", detail)
         return FundaReplyResult("submit_failed", f"{response.status_code}: {detail}")
 
-    async def _wait_for_confirmation(self, listing: Listing, started_at: datetime) -> FundaReplyResult:
+    async def _wait_for_confirmation(
+        self,
+        listing: Listing,
+        started_at: datetime,
+        sent_at: datetime | None,
+    ) -> FundaReplyResult:
         confirmation = self.settings.confirmation
         deadline = time.monotonic() + confirmation.poll_seconds
         try:
@@ -202,11 +213,17 @@ class FundaReplier:
                         started_at,
                     )
                     if messages:
-                        return FundaReplyResult("confirmation_confirmed", "Funda confirmation email arrived.")
+                        return FundaReplyResult(
+                            "confirmation_confirmed",
+                            "Funda confirmation email arrived.",
+                            sent_at=sent_at,
+                            confirmation_at=messages[0].created_at or datetime.now(timezone.utc),
+                        )
                     if time.monotonic() >= deadline:
                         return FundaReplyResult(
                             "confirmation_missing",
                             "Funda accepted the contact request, but no confirmation email arrived in time.",
+                            sent_at=sent_at,
                         )
                     await asyncio.sleep(confirmation.poll_interval_seconds)
         except httpx.HTTPError as exc:
@@ -214,6 +231,7 @@ class FundaReplier:
             return FundaReplyResult(
                 "confirmation_error",
                 f"Funda accepted the contact request, but mail.tm confirmation check failed: {exc}",
+                sent_at=sent_at,
             )
 
 

@@ -1,5 +1,6 @@
 from html import escape
 import logging
+from datetime import datetime, timezone
 
 from telegram import Bot
 from telegram.constants import ParseMode
@@ -167,7 +168,8 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
 
                 if await db.was_sent(chat_id, listing.source, listing.id):
                     continue
-                await db.mark_seen(listing.source, listing.id, listing.url, listing.title, listing.price)
+                seen_listing = await db.mark_seen(listing.source, listing.id, listing.url, listing.title, listing.price)
+                first_seen_at = seen_listing.get("scraped_at") if seen_listing else None
                 await db.log_event(
                     "listing_new",
                     chat_id=chat_id,
@@ -175,7 +177,12 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                     listing_id=listing.id,
                     title=listing.title,
                     status="new",
-                    data={"price": listing.price, "url": listing.url},
+                    data={
+                        "price": listing.price,
+                        "url": listing.url,
+                        "first_seen_at": first_seen_at,
+                        "first_seen_by_bot": bool(seen_listing.get("inserted")) if seen_listing else False,
+                    },
                 )
                 await _send_notification(bot, chat_id, listing)
                 await db.mark_sent(chat_id, listing.source, listing.id)
@@ -191,6 +198,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                             KamernetReplyResult,
                             "Kamernet",
                             bot,
+                            first_seen_at,
                         )
                         if attempted:
                             reply_attempts[KamernetScraper.SOURCE] += 1
@@ -205,6 +213,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                             FundaReplyResult,
                             "Funda",
                             bot,
+                            first_seen_at,
                         )
                         if attempted:
                             reply_attempts[FundaScraper.SOURCE] += 1
@@ -219,6 +228,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                             RoofzReplyResult,
                             "Roofz",
                             bot,
+                            first_seen_at,
                         )
                         if attempted:
                             reply_attempts[RoofzScraper.SOURCE] += 1
@@ -289,6 +299,7 @@ async def _maybe_auto_reply_to_listing(
     result_cls,
     source_label: str,
     bot: Bot | None = None,
+    first_seen_at: str | None = None,
 ) -> bool:
     if not settings.enabled:
         await db.log_event(
@@ -356,7 +367,10 @@ async def _maybe_auto_reply_to_listing(
         listing_id=listing.id,
         title=listing.title,
         status="attempting",
-        data={"dry_run": settings.dry_run},
+        data={
+            "dry_run": settings.dry_run,
+            **_reply_timing_data(first_seen_at, None),
+        },
     )
     await db.mark_auto_reply_result(
         listing.source,
@@ -365,6 +379,7 @@ async def _maybe_auto_reply_to_listing(
         chat_id,
         "attempting",
         settings.dry_run,
+        first_seen_at=first_seen_at,
     )
 
     try:
@@ -382,6 +397,9 @@ async def _maybe_auto_reply_to_listing(
         result.status,
         settings.dry_run,
         result.detail,
+        first_seen_at=first_seen_at,
+        sent_at=getattr(result, "sent_at", None),
+        confirmation_at=getattr(result, "confirmation_at", None),
     )
     logger.info(
         "%s auto-reply result for %s: %s (%s)",
@@ -399,7 +417,10 @@ async def _maybe_auto_reply_to_listing(
         title=listing.title,
         status=result.status,
         detail=result.detail,
-        data={"dry_run": settings.dry_run},
+        data={
+            "dry_run": settings.dry_run,
+            **_reply_timing_data(first_seen_at, result),
+        },
     )
     if bot and _should_warn_auto_reply(result.status, settings.dry_run):
         await bot.send_message(
@@ -423,6 +444,58 @@ async def _maybe_auto_reply_to_listing(
             detail=result.detail,
         )
     return True
+
+
+def _reply_timing_data(first_seen_at: str | None, result=None) -> dict:
+    now = datetime.now(timezone.utc)
+    sent_at = getattr(result, "sent_at", None) if result else None
+    confirmation_at = getattr(result, "confirmation_at", None) if result else None
+    first_seen_dt = _parse_timestamp(first_seen_at)
+    sent_dt = _parse_timestamp(sent_at)
+    confirmation_dt = _parse_timestamp(confirmation_at)
+
+    data = {
+        "first_seen_at": first_seen_at,
+        "seconds_since_first_seen": _seconds_between(first_seen_dt, now),
+    }
+    if sent_dt:
+        data["reply_sent_at"] = _format_timestamp(sent_dt)
+        data["seconds_to_reply"] = _seconds_between(first_seen_dt, sent_dt)
+    if confirmation_dt:
+        data["confirmation_at"] = _format_timestamp(confirmation_dt)
+        data["seconds_to_confirmation"] = _seconds_between(first_seen_dt, confirmation_dt)
+    return {key: value for key, value in data.items() if value is not None}
+
+
+def _parse_timestamp(value: str | datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        normalized = value.strip().replace("Z", "+00:00")
+        if not normalized:
+            return None
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            try:
+                parsed = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _seconds_between(start: datetime | None, end: datetime | None) -> float | None:
+    if not start or not end:
+        return None
+    return max(0.0, round((end - start).total_seconds(), 3))
 
 
 def _should_warn_auto_reply(status: str, dry_run: bool) -> bool:

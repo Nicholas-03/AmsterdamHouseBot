@@ -65,6 +65,29 @@ class BotEventLoggingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([event["event_type"] for event in events], ["recent_event"])
 
+    async def test_auto_reply_result_tracks_reply_and_confirmation_latency(self):
+        await db.init_db()
+        await db.mark_seen("funda", "abc", "https://example.test", "Test listing", "EUR 1000")
+
+        await db.mark_auto_reply_result(
+            "funda",
+            "abc",
+            "https://example.test",
+            123,
+            "confirmation_confirmed",
+            False,
+            first_seen_at="2026-05-26 10:00:00",
+            sent_at="2026-05-26 10:00:05",
+            confirmation_at="2026-05-26 10:00:35",
+        )
+        reply = await db.get_auto_reply("funda", "abc")
+
+        self.assertEqual(reply["first_seen_at"], "2026-05-26 10:00:00")
+        self.assertEqual(reply["sent_at"], "2026-05-26 10:00:05")
+        self.assertEqual(reply["confirmation_at"], "2026-05-26 10:00:35")
+        self.assertEqual(reply["reply_latency_seconds"], 5)
+        self.assertEqual(reply["confirmation_latency_seconds"], 35)
+
 
 if __name__ == "__main__":
     unittest.main()
