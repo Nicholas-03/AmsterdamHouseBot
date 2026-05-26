@@ -256,10 +256,17 @@ class KamernetReplier:
 
         captured_request: dict | None = None
         captured = asyncio.Event()
+        context_cookies = await self._context.cookies(["https://kamernet.nl", "https://id.kamernet.nl"])
 
         async def route_handler(route) -> None:
             nonlocal captured_request
             request = route.request
+            if captured.is_set():
+                try:
+                    await route.abort()
+                except Exception:
+                    pass
+                return
             captured_request = {
                 "method": request.method,
                 "url": request.url,
@@ -267,7 +274,10 @@ class KamernetReplier:
                 "post_data": request.post_data,
             }
             captured.set()
-            await route.abort()
+            try:
+                await route.abort()
+            except Exception as exc:
+                logger.debug("Kamernet submit route was already handled: %s", exc)
 
         route_pattern = "**/services/api/conversation/listing-reaction**"
         await self._context.route(route_pattern, route_handler)
@@ -289,9 +299,13 @@ class KamernetReplier:
         if not captured_request:
             return KamernetReplyResult("api_unavailable", "Kamernet API request could not be captured.")
 
-        return await self._send_captured_api_request(captured_request)
+        return await self._send_captured_api_request(captured_request, context_cookies)
 
-    async def _send_captured_api_request(self, captured_request: dict) -> KamernetReplyResult:
+    async def _send_captured_api_request(
+        self,
+        captured_request: dict,
+        context_cookies: list[dict] | None = None,
+    ) -> KamernetReplyResult:
         if not self._context:
             return KamernetReplyResult("api_unavailable", "Kamernet browser context is not available.")
 
@@ -309,7 +323,9 @@ class KamernetReplier:
 
         try:
             async with httpx.AsyncClient(timeout=self.settings.timeout_seconds, follow_redirects=True) as client:
-                await _copy_context_cookies(client, self._context)
+                if context_cookies is None:
+                    context_cookies = await self._context.cookies(["https://kamernet.nl", "https://id.kamernet.nl"])
+                _copy_cookies(client, context_cookies)
                 response = await client.request(
                     captured_request.get("method") or "POST",
                     captured_request["url"],
@@ -453,8 +469,8 @@ def _safe_replay_headers(headers: dict[str, str]) -> dict[str, str]:
     return replay_headers
 
 
-async def _copy_context_cookies(client: httpx.AsyncClient, context: BrowserContext) -> None:
-    for cookie in await context.cookies(["https://kamernet.nl", "https://id.kamernet.nl"]):
+def _copy_cookies(client: httpx.AsyncClient, cookies: list[dict]) -> None:
+    for cookie in cookies:
         name = cookie.get("name")
         value = cookie.get("value")
         if not name or value is None:
