@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 
 from .base import BaseScraper, Listing, parse_euro_amount, parse_first_int
 from ._resilient_fetch import fetch_html
+from .student_compatibility import filter_student_compatible_listings
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,17 @@ _HEADERS = {
 class ParariusScraper(BaseScraper):
     SOURCE = "pararius"
     BASE_URL = "https://www.pararius.nl"
+
+    def __init__(
+        self,
+        city: str = "Amsterdam",
+        max_price: int = 2000,
+        min_bedrooms: int = 1,
+        min_size_m2: int = 0,
+        student_compatibility_filter_enabled: bool = True,
+    ):
+        super().__init__(city, max_price, min_bedrooms, min_size_m2)
+        self.student_compatibility_filter_enabled = student_compatibility_filter_enabled
 
     def _build_url(self) -> str:
         city_slug = self.city.lower().replace(" ", "-")
@@ -38,6 +50,12 @@ class ParariusScraper(BaseScraper):
                 for article in soup.select("section.listing-search-item")
                 if (listing := self._parse_article(article)) and self._matches_filters(listing)
             ]
+            if self.student_compatibility_filter_enabled:
+                listings = await filter_student_compatible_listings(
+                    listings,
+                    headers=_HEADERS,
+                    source=self.SOURCE,
+                )
             logger.info("Pararius: found %d matching listings", len(listings))
             return listings
         except Exception as exc:
@@ -91,6 +109,7 @@ class ParariusScraper(BaseScraper):
                 price_eur=parse_euro_amount(price),
                 bedrooms=bedrooms,
                 size_m2_value=size_value,
+                reply_data={"card_text": article.get_text(" ", strip=True)},
             )
         except Exception as exc:
             logger.warning("Failed to parse Pararius article: %s", exc)

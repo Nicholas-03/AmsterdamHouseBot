@@ -119,6 +119,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
             max_price=user_filters["max_price"],
             min_bedrooms=user_filters["min_bedrooms"],
             min_size_m2=user_filters["min_size_m2"],
+            student_compatibility_filter_enabled=config.PARARIUS_STUDENT_COMPATIBILITY_FILTER_ENABLED,
         ),
         FundaScraper.SOURCE: lambda: FundaScraper(
             city=user_filters["city"],
@@ -139,6 +140,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
             max_price=user_filters["max_price"],
             min_bedrooms=user_filters["min_bedrooms"],
             min_size_m2=user_filters["min_size_m2"],
+            student_compatibility_filter_enabled=config.HUURWONINGEN_STUDENT_COMPATIBILITY_FILTER_ENABLED,
         ),
         RoofzScraper.SOURCE: lambda: RoofzScraper(
             city=user_filters["city"],
@@ -339,6 +341,10 @@ def _scraper_event_data(scraper, user_filters: dict) -> dict:
         data["kamernet_property_type"] = user_filters.get("kamernet_property_type", "any")
     if scraper.SOURCE == FundaScraper.SOURCE:
         data["funda_keywords"] = list(getattr(scraper, "keywords", ()))
+    if scraper.SOURCE in {ParariusScraper.SOURCE, HuurwoningenScraper.SOURCE}:
+        data["student_compatibility_filter_enabled"] = bool(
+            getattr(scraper, "student_compatibility_filter_enabled", False)
+        )
     build_url = getattr(scraper, "_build_url", None)
     if callable(build_url):
         try:

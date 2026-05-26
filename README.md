@@ -82,6 +82,8 @@ Environment variables:
 - `POLL_INTERVAL_SECONDS`: optional, scan interval in seconds, defaults to `300`
 - `DB_PATH`: optional, SQLite database path, defaults to `listings.db`
 - `TELEGRAM_ALLOWED_CHAT_IDS`: optional, comma-separated Telegram chat IDs allowed to use the bot. Leave empty for local unrestricted use.
+- `PARARIUS_STUDENT_COMPATIBILITY_FILTER_ENABLED`: optional, defaults to `1`; when enabled, Pararius detail pages must look student/guarantor-compatible and must not explicitly reject students or guarantors.
+- `HUURWONINGEN_STUDENT_COMPATIBILITY_FILTER_ENABLED`: optional, defaults to `1`; same compatibility filter for Huurwoningen detail pages.
 
 Kamernet auto-reply variables:
 
@@ -188,7 +190,7 @@ After that, the scheduled scanner will keep running in the background while the 
 
 1. `main.py` starts the Telegram application.
 2. `bot.py` registers commands and schedules the recurring scan job.
-3. `scanner.py` runs the enabled scrapers for each active user.
+3. `scanner.py` runs the enabled scrapers for each active user. Pararius and Huurwoningen detail pages are filtered for student/guarantor compatibility by default.
 4. `db.py` stores filters, deduplicates listings, records operational events, and prunes event rows older than 3 days.
 
 ## Auto-Reply
