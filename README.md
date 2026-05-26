@@ -16,6 +16,7 @@ The bot stores user filters and already-seen listings in SQLite, so duplicate li
 
 - Runs a scheduled scan every `POLL_INTERVAL_SECONDS` seconds
 - Lets each Telegram user save their own Kamernet property types, rent, bedroom/room, and surface-area filters
+- Lets each Telegram user choose which sites send listing notifications
 - Lets each Telegram user toggle Kamernet/Funda/Roofz auto-replies on or off
 - Sends new listings directly in Telegram
 - Supports an on-demand scan with `/test`
@@ -166,7 +167,7 @@ On first boot the bot automatically creates the SQLite database and its tables.
    - minimum surface area in square meters
 4. Send `/test` to trigger an immediate scan.
 
-After that, the scheduled scanner will keep running in the background while the process stays alive. Send `/autoreply on` if you want the bot to answer new matching Kamernet, Funda, and Roofz listings automatically, and `/autoreply off` to disable replies while keeping Telegram notifications.
+After that, the scheduled scanner will keep running in the background while the process stays alive. Send `/sources` to see which sites are enabled, `/sources only kamernet funda` to receive notifications only from those sites, or `/sources all` to restore every source. Send `/autoreply on` if you want the bot to answer new matching Kamernet, Funda, and Roofz listings automatically, and `/autoreply off` to disable replies while keeping Telegram notifications.
 
 ## Available Commands
 
@@ -174,6 +175,7 @@ After that, the scheduled scanner will keep running in the background while the 
 - `/help` - show available commands
 - `/search` - save or update filters
 - `/filters` - show current filters
+- `/sources on|off|only|all|status` - control which sites send notifications
 - `/autoreply on|off|status` - control Kamernet/Funda/Roofz auto-replies
 - `/logs` - show recent operational events from the SQLite event log
 - `/test` - run a scan immediately
@@ -186,7 +188,7 @@ After that, the scheduled scanner will keep running in the background while the 
 
 1. `main.py` starts the Telegram application.
 2. `bot.py` registers commands and schedules the recurring scan job.
-3. `scanner.py` runs all scrapers for each active user.
+3. `scanner.py` runs the enabled scrapers for each active user.
 4. `db.py` stores filters, deduplicates listings, records operational events, and prunes event rows older than 3 days.
 
 ## Auto-Reply

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import aiosqlite
 
 from config import DB_PATH
+from notification_sources import DEFAULT_ENABLED_SOURCES_JSON, normalize_sources, serialize_sources
 from scrapers.kamernet import serialize_kamernet_property_types
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ async def init_db():
                 min_size_m2   INTEGER DEFAULT 0,
                 kamernet_property_type TEXT DEFAULT 'any',
                 auto_reply_enabled INTEGER DEFAULT 0,
+                enabled_sources TEXT DEFAULT '["pararius", "funda", "kamernet", "huurwoningen", "roofz"]',
                 neighborhoods TEXT    DEFAULT '[]',
                 active        INTEGER DEFAULT 1,
                 setup_in_progress INTEGER DEFAULT 0,
@@ -118,6 +120,12 @@ async def init_db():
         await _ensure_column(db, "user_filters", "min_size_m2", "INTEGER DEFAULT 0")
         await _ensure_column(db, "user_filters", "kamernet_property_type", "TEXT DEFAULT 'any'")
         await _ensure_column(db, "user_filters", "auto_reply_enabled", "INTEGER DEFAULT 0")
+        await _ensure_column(
+            db,
+            "user_filters",
+            "enabled_sources",
+            f"TEXT DEFAULT '{DEFAULT_ENABLED_SOURCES_JSON}'",
+        )
         await _ensure_column(db, "user_filters", "setup_in_progress", "INTEGER DEFAULT 0")
         await _ensure_column(db, "auto_replies", "first_seen_at", "TIMESTAMP")
         await _ensure_column(db, "auto_replies", "reply_latency_seconds", "REAL")
@@ -251,6 +259,7 @@ async def get_filters(chat_id: int) -> dict | None:
                 "min_size_m2": row["min_size_m2"] or 0,
                 "kamernet_property_type": serialize_kamernet_property_types(row["kamernet_property_type"]),
                 "auto_reply_enabled": bool(row["auto_reply_enabled"]),
+                "enabled_sources": normalize_sources(row["enabled_sources"]),
                 "active": bool(row["active"]),
                 "setup_in_progress": bool(row["setup_in_progress"]),
             }
@@ -446,6 +455,22 @@ async def set_auto_reply(chat_id: int, enabled: bool) -> None:
         await db.commit()
 
 
+async def set_enabled_sources(chat_id: int, enabled_sources) -> None:
+    normalized_sources = normalize_sources(enabled_sources)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO user_filters (chat_id, enabled_sources)
+            VALUES (?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                enabled_sources=excluded.enabled_sources,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (chat_id, serialize_sources(normalized_sources)),
+        )
+        await db.commit()
+
+
 async def clear_seen(source: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
         if source:
@@ -473,6 +498,7 @@ async def get_all_active_users() -> list[dict]:
                     "min_size_m2": row["min_size_m2"] or 0,
                     "kamernet_property_type": serialize_kamernet_property_types(row["kamernet_property_type"]),
                     "auto_reply_enabled": bool(row["auto_reply_enabled"]),
+                    "enabled_sources": normalize_sources(row["enabled_sources"]),
                     "active": bool(row["active"]),
                     "setup_in_progress": bool(row["setup_in_progress"]),
                 }

@@ -14,6 +14,7 @@ import config
 import db
 from funda_replier import FundaReplySettings
 from kamernet_replier import KamernetReplySettings
+from notification_sources import ALL_SOURCES, format_sources, normalize_sources, parse_source_tokens
 from roofz_replier import RoofzReplySettings
 from scanner import run_scan_for_user
 from scrapers.kamernet import (
@@ -56,6 +57,7 @@ def create_application() -> Application:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("filters", cmd_filters))
+    app.add_handler(CommandHandler("sources", cmd_sources))
     app.add_handler(CommandHandler("autoreply", cmd_autoreply))
     app.add_handler(CommandHandler("logs", cmd_logs))
     app.add_handler(CommandHandler("pause", cmd_pause))
@@ -139,6 +141,82 @@ async def cmd_filters(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await update.message.reply_text(_format_filters(user_filters))
+
+
+async def cmd_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _ensure_authorized(update):
+        return
+
+    chat_id = update.effective_chat.id
+    await db.log_event("telegram_command", chat_id=chat_id, status="/sources")
+    user_filters = await db.get_filters(chat_id)
+    if not user_filters:
+        await update.message.reply_text("Set your filters first with /search.")
+        return
+
+    args = context.args or []
+    action = args[0].casefold() if args else "status"
+    current_sources = normalize_sources(user_filters.get("enabled_sources"))
+
+    if action in {"status", "show"}:
+        await update.message.reply_text(_format_sources_status(user_filters))
+        return
+
+    if action in {"all", "reset"}:
+        next_sources = ALL_SOURCES
+    elif action in {"only", "set"}:
+        if _source_args_include_all(args[1:]):
+            next_sources = ALL_SOURCES
+        else:
+            next_sources = await _parse_sources_or_reply(update, args[1:])
+            if next_sources is None:
+                return
+    elif action in {"on", "enable", "add"}:
+        if _source_args_include_all(args[1:]):
+            next_sources = ALL_SOURCES
+        else:
+            sources_to_add = await _parse_sources_or_reply(update, args[1:])
+            if sources_to_add is None:
+                return
+            next_sources = tuple(
+                source
+                for source in ALL_SOURCES
+                if source in current_sources or source in sources_to_add
+            )
+    elif action in {"off", "disable", "remove"}:
+        if _source_args_include_all(args[1:]):
+            await update.message.reply_text(
+                "Use /pause to pause all notifications, or turn off specific sites with /sources off <site>."
+            )
+            return
+        sources_to_remove = await _parse_sources_or_reply(update, args[1:])
+        if sources_to_remove is None:
+            return
+        next_sources = tuple(
+            source
+            for source in current_sources
+            if source not in sources_to_remove
+        )
+        if not next_sources:
+            await update.message.reply_text(
+                "At least one notification site must stay enabled. Use /pause to pause all notifications."
+            )
+            return
+    else:
+        await update.message.reply_text(_sources_usage())
+        return
+
+    await db.set_enabled_sources(chat_id, next_sources)
+    await db.log_event(
+        "notification_sources_changed",
+        chat_id=chat_id,
+        status="saved",
+        data={"enabled_sources": list(next_sources)},
+    )
+    updated_filters = await db.get_filters(chat_id)
+    await update.message.reply_text(
+        "Notification sites updated.\n\n" + _format_sources_status(updated_filters)
+    )
 
 
 async def cmd_autoreply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -363,6 +441,7 @@ async def receive_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "min_size_m2": saved_filters["min_size_m2"],
             "kamernet_property_type": saved_filters["kamernet_property_type"],
             "active": saved_filters["active"],
+            "enabled_sources": list(saved_filters["enabled_sources"]),
         },
     )
     await update.message.reply_text("Filters saved.\n\n" + _format_filters(saved_filters))
@@ -548,6 +627,7 @@ async def _send_help(update: Update) -> None:
         "/help - show this help message\n"
         "/search - set Kamernet property types, rent, bedrooms, and size filters\n"
         "/filters - show active filters\n"
+        "/sources on|off|only|all|status - control which sites send notifications\n"
         "/autoreply on|off|status - control Kamernet/Funda/Roofz auto-replies\n"
         "/logs - show recent operational events\n"
         "/test - scan now\n"
@@ -570,6 +650,7 @@ def _format_filters(user_filters: dict) -> str:
         user_filters.get("kamernet_property_type", DEFAULT_KAMERNET_PROPERTY_TYPE),
     )
     auto_reply_text = "On" if user_filters.get("auto_reply_enabled") else "Off"
+    notification_sources = format_sources(user_filters.get("enabled_sources"))
     status_text = "Setup in progress"
     if not user_filters.get("setup_in_progress"):
         status_text = "Active" if user_filters["active"] else "Paused"
@@ -577,12 +658,45 @@ def _format_filters(user_filters: dict) -> str:
         "Active filters:\n"
         f"City: {user_filters['city']}\n"
         f"Kamernet property types: {kamernet_property_type}\n"
+        f"Notification sites: {notification_sources}\n"
         f"Auto-reply: {auto_reply_text}\n"
         "Kamernet search radius: 5 km\n"
         f"Max rent: {price_text}\n"
         f"Minimum bedrooms/rooms: {bedrooms_text}\n"
         f"Minimum size: {size_text}\n"
         f"Status: {status_text}"
+    )
+
+
+async def _parse_sources_or_reply(update: Update, args: list[str]) -> tuple[str, ...] | None:
+    sources, invalid = parse_source_tokens(args)
+    if invalid or not sources:
+        await update.message.reply_text(_sources_usage(invalid))
+        return None
+    return tuple(sources)
+
+
+def _source_args_include_all(args: list[str]) -> bool:
+    return any(arg.strip(" ,;").casefold() == "all" for arg in args)
+
+
+def _format_sources_status(user_filters: dict) -> str:
+    return (
+        "Notification sites:\n"
+        f"Enabled: {format_sources(user_filters.get('enabled_sources'))}\n"
+        f"Available: {format_sources(ALL_SOURCES)}\n\n"
+        "Use /sources on funda, /sources off pararius, /sources only kamernet funda, or /sources all."
+    )
+
+
+def _sources_usage(invalid: list[str] | None = None) -> str:
+    prefix = ""
+    if invalid:
+        prefix = "Unknown site: " + ", ".join(invalid) + "\n\n"
+    return (
+        prefix
+        + "Use /sources status, /sources all, /sources on <site>, /sources off <site>, or /sources only <sites>.\n"
+        f"Sites: {format_sources(ALL_SOURCES)}."
     )
 
 

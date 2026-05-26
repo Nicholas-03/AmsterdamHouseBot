@@ -14,6 +14,7 @@ from kamernet_replier import (
     KamernetReplySettings,
     should_skip_existing_reply,
 )
+from notification_sources import ALL_SOURCES, normalize_sources
 from roofz_replier import RoofzReplier, RoofzReplyResult, RoofzReplySettings
 from scrapers.funda import FundaScraper
 from scrapers.huurwoningen import HuurwoningenScraper
@@ -39,11 +40,14 @@ _FILTER_MATCH_KEYS = (
     "min_size_m2",
     "kamernet_property_type",
     "auto_reply_enabled",
+    "enabled_sources",
 )
 
 
 async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool = True) -> int:
     chat_id = user_filters["chat_id"]
+    enabled_sources = normalize_sources(user_filters.get("enabled_sources"))
+    enabled_source_set = set(enabled_sources)
     await db.log_event(
         "scan_user_started",
         chat_id=chat_id,
@@ -56,6 +60,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
             "min_size_m2": user_filters.get("min_size_m2"),
             "kamernet_property_type": user_filters.get("kamernet_property_type"),
             "auto_reply_enabled": user_filters.get("auto_reply_enabled"),
+            "enabled_sources": list(enabled_sources),
         },
     )
     kamernet_reply_settings = KamernetReplySettings.from_config()
@@ -65,7 +70,11 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
     roofz_reply_settings = RoofzReplySettings.from_config()
     roofz_reply_settings_error = roofz_reply_settings.ready_error()
     if user_filters.get("auto_reply_enabled"):
-        if kamernet_reply_settings.enabled and kamernet_reply_settings_error:
+        if (
+            KamernetScraper.SOURCE in enabled_source_set
+            and kamernet_reply_settings.enabled
+            and kamernet_reply_settings_error
+        ):
             logger.warning("Kamernet auto-reply is unavailable for this scan: %s", kamernet_reply_settings_error)
             await db.log_event(
                 "auto_reply_settings_unavailable",
@@ -75,7 +84,11 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                 status="not_ready",
                 detail=kamernet_reply_settings_error,
             )
-        if funda_reply_settings.enabled and funda_reply_settings_error:
+        if (
+            FundaScraper.SOURCE in enabled_source_set
+            and funda_reply_settings.enabled
+            and funda_reply_settings_error
+        ):
             logger.warning("Funda auto-reply is unavailable for this scan: %s", funda_reply_settings_error)
             await db.log_event(
                 "auto_reply_settings_unavailable",
@@ -85,7 +98,11 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                 status="not_ready",
                 detail=funda_reply_settings_error,
             )
-        if roofz_reply_settings.enabled and roofz_reply_settings_error:
+        if (
+            RoofzScraper.SOURCE in enabled_source_set
+            and roofz_reply_settings.enabled
+            and roofz_reply_settings_error
+        ):
             logger.warning("Roofz auto-reply is unavailable for this scan: %s", roofz_reply_settings_error)
             await db.log_event(
                 "auto_reply_settings_unavailable",
@@ -96,39 +113,44 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                 detail=roofz_reply_settings_error,
             )
 
-    scrapers = [
-        ParariusScraper(
+    scraper_factories = {
+        ParariusScraper.SOURCE: lambda: ParariusScraper(
             city=user_filters["city"],
             max_price=user_filters["max_price"],
             min_bedrooms=user_filters["min_bedrooms"],
             min_size_m2=user_filters["min_size_m2"],
         ),
-        FundaScraper(
+        FundaScraper.SOURCE: lambda: FundaScraper(
             city=user_filters["city"],
             max_price=user_filters["max_price"],
             min_bedrooms=user_filters["min_bedrooms"],
             min_size_m2=user_filters["min_size_m2"],
             keywords=config.FUNDA_KEYWORDS,
         ),
-        KamernetScraper(
+        KamernetScraper.SOURCE: lambda: KamernetScraper(
             city=user_filters["city"],
             max_price=user_filters["max_price"],
             min_bedrooms=user_filters["min_bedrooms"],
             min_size_m2=user_filters["min_size_m2"],
             property_type=user_filters.get("kamernet_property_type", "any"),
         ),
-        HuurwoningenScraper(
+        HuurwoningenScraper.SOURCE: lambda: HuurwoningenScraper(
             city=user_filters["city"],
             max_price=user_filters["max_price"],
             min_bedrooms=user_filters["min_bedrooms"],
             min_size_m2=user_filters["min_size_m2"],
         ),
-        RoofzScraper(
+        RoofzScraper.SOURCE: lambda: RoofzScraper(
             city=user_filters["city"],
             max_price=user_filters["max_price"],
             min_bedrooms=user_filters["min_bedrooms"],
             min_size_m2=user_filters["min_size_m2"],
         ),
+    }
+    scrapers = [
+        scraper_factories[source]()
+        for source in ALL_SOURCES
+        if source in enabled_source_set
     ]
 
     new_count = 0
@@ -297,7 +319,11 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
         "scan_user_finished",
         chat_id=chat_id,
         status="finished",
-        data={"new_count": new_count, "reply_attempts": reply_attempts},
+        data={
+            "new_count": new_count,
+            "reply_attempts": reply_attempts,
+            "enabled_sources": list(enabled_sources),
+        },
     )
     return new_count
 

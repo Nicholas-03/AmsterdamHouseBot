@@ -7,6 +7,7 @@ from pathlib import Path
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
 import db
+from notification_sources import ALL_SOURCES
 
 
 class BotEventLoggingTests(unittest.IsolatedAsyncioTestCase):
@@ -87,6 +88,27 @@ class BotEventLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply["confirmation_at"], "2026-05-26 10:00:35")
         self.assertEqual(reply["reply_latency_seconds"], 5)
         self.assertEqual(reply["confirmation_latency_seconds"], 35)
+
+    async def test_filters_default_to_all_notification_sources(self):
+        await db.init_db()
+
+        await db.save_filters(123, max_price=1500, min_bedrooms=1, min_size_m2=25)
+        user_filters = await db.get_filters(123)
+        active_users = await db.get_all_active_users()
+
+        self.assertEqual(user_filters["enabled_sources"], ALL_SOURCES)
+        self.assertEqual(active_users[0]["enabled_sources"], ALL_SOURCES)
+
+    async def test_enabled_sources_are_saved_and_preserved_when_filters_change(self):
+        await db.init_db()
+
+        await db.save_filters(123, max_price=1500, min_bedrooms=1, min_size_m2=25)
+        await db.set_enabled_sources(123, ["funda", "roofz"])
+        await db.save_filters(123, max_price=1700, min_bedrooms=2, min_size_m2=30)
+        user_filters = await db.get_filters(123)
+
+        self.assertEqual(user_filters["enabled_sources"], ("funda", "roofz"))
+        self.assertEqual(user_filters["max_price"], 1700)
 
     async def test_maintenance_marks_stale_attempting_auto_replies(self):
         await db.init_db()
