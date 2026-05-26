@@ -4,7 +4,14 @@ import unittest
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
 from mailtm_preapplication import MailTmSettings
-from roofz_replier import RoofzReplier, RoofzReplySettings, _build_contact_payload, _radio_option_matches
+from roofz_replier import (
+    RoofzReplier,
+    RoofzReplySettings,
+    _build_contact_payload,
+    _build_preapplication_payload,
+    _parse_osre_invitation,
+    _radio_option_matches,
+)
 from scrapers.base import Listing
 
 
@@ -22,8 +29,13 @@ def _settings(**overrides) -> RoofzReplySettings:
         "headless": True,
         "timeout_seconds": 10,
         "preapplication_enabled": False,
+        "preapplication_api_enabled": True,
         "preapplication_poll_seconds": 1,
         "preapplication_poll_interval_seconds": 1,
+        "preapplication_api_url": "https://relet.portal.prd.osre.eu/portal/applications/pre-application",
+        "preapplication_availability_api_base": (
+            "https://financial-check.portal.prd.osre.eu/portal/financial-check/check-availability"
+        ),
         "mailtm": MailTmSettings(
             api_base="https://api.mail.tm",
             address="tenant@example.com",
@@ -98,6 +110,30 @@ class RoofzReplySettingsTests(unittest.TestCase):
         self.assertEqual(payload["subscription"]["phone"], "+391234567890")
         self.assertEqual(payload["subscription"]["property_id"], 12532581)
         self.assertIn("_ts", payload["subscription"]["metadata"])
+
+    def test_parse_osre_invitation_url(self):
+        parsed = _parse_osre_invitation(
+            "https://roofz.onosre.com/invitation/invite-id/token/token-id/greeting?x=1"
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "origin": "https://roofz.onosre.com",
+                "invitation_id": "invite-id",
+                "token": "token-id",
+            },
+        )
+
+    def test_build_preapplication_payload_matches_osre_api_shape(self):
+        payload = _build_preapplication_payload(_settings(birth_date="21-04-2003", monthly_income="800"), "invite-id")
+
+        person = payload["application"]["person"]
+        self.assertEqual(payload["invitationId"], "invite-id")
+        self.assertEqual(person["personalDetails"]["dateOfBirth"], "2003-04-21")
+        self.assertEqual(person["personalDetails"]["gender"], "male")
+        self.assertEqual(person["workSituation"]["workSituation"], "student")
+        self.assertEqual(person["workSituation"]["workMonthlySalary"], 800)
 
     def test_radio_option_matching_does_not_match_male_inside_female(self):
         self.assertTrue(_radio_option_matches("male", "male", "Male"))

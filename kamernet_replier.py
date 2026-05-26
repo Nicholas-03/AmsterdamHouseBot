@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -71,6 +74,7 @@ class KamernetReplySettings:
     expected_move_date: str
     headless: bool
     timeout_seconds: int
+    api_reply_enabled: bool
     storage_state_path: Path
 
     @classmethod
@@ -88,6 +92,7 @@ class KamernetReplySettings:
             expected_move_date=config.KAMERNET_EXPECTED_MOVE_DATE,
             headless=config.KAMERNET_BROWSER_HEADLESS,
             timeout_seconds=max(5, config.KAMERNET_BROWSER_TIMEOUT_SECONDS),
+            api_reply_enabled=config.KAMERNET_API_REPLY_ENABLED,
             storage_state_path=Path(config.KAMERNET_STORAGE_STATE_PATH).expanduser(),
         )
 
@@ -168,63 +173,27 @@ class KamernetReplier:
         page = await self._context.new_page()
         page.set_default_timeout(self.settings.timeout_seconds * 1000)
         try:
-            await page.goto(listing.url, wait_until="domcontentloaded", timeout=self.settings.timeout_seconds * 1000)
-            await _accept_cookies(page)
+            prepared = await self._prepare_reply_form(page, listing)
+            if isinstance(prepared, KamernetReplyResult):
+                return prepared
+            submit_button = prepared
 
-            if await _needs_manual_verification(page):
-                return KamernetReplyResult("needs_verification", "Kamernet asked for manual verification.")
-
-            opened = await _open_contact_form(page)
-            if not opened:
-                return KamernetReplyResult("contact_button_not_found", "Could not find the Contact landlord button.")
-            await _accept_cookies(page)
-
-            if await _is_auth_page(page):
-                login_result = await self._login(page)
-                if login_result:
-                    return login_result
-                await self._save_storage_state()
-                await page.goto(listing.url, wait_until="domcontentloaded", timeout=self.settings.timeout_seconds * 1000)
-                await _accept_cookies(page)
-                opened = await _open_contact_form(page)
-                if not opened:
-                    return KamernetReplyResult(
-                        "contact_button_not_found",
-                        "Logged in, but could not reopen the Contact landlord form.",
-                )
-                await _accept_cookies(page)
-
-            if await _needs_manual_verification(page):
-                return KamernetReplyResult("needs_verification", "Kamernet asked for manual verification.")
-
-            await _fill_structured_answers(page, self.settings)
-
-            message_input = await _find_message_input(page, wait_for_visible=True)
-            if not message_input:
-                return KamernetReplyResult(
-                    "message_field_not_found",
-                    "Contact form opened, but no message field was detected.",
-                )
-
-            await message_input.fill(self.settings.message)
             if self.settings.dry_run:
                 return KamernetReplyResult("dry_run_ready", "Message field was found and filled; submit was skipped.")
 
-            submit_button = await _first_visible(page.get_by_role("button", name=_SUBMIT_BUTTON_RE))
-            if not submit_button:
-                return KamernetReplyResult("submit_button_not_found", "No safe send button was detected.")
+            if self.settings.api_reply_enabled:
+                api_result = await self._submit_with_captured_api(page, submit_button)
+                if api_result.status == "sent":
+                    return api_result
+                logger.warning(
+                    "Kamernet API submit failed for %s (%s); falling back to browser submit.",
+                    listing.url,
+                    api_result.detail,
+                )
+                browser_result = await self._submit_with_browser_fallback(page, listing, api_result)
+                return browser_result
 
-            await submit_button.click()
-            await _wait_for_quiet(page)
-            body_text = await _body_text(page)
-            if _SUCCESS_RE.search(body_text):
-                return KamernetReplyResult("sent", "Kamernet showed a send confirmation.")
-            if _SUBMIT_ERROR_RE.search(body_text):
-                return KamernetReplyResult("submit_failed", "Kamernet showed an error after submit.")
-            return KamernetReplyResult(
-                "submitted_unconfirmed",
-                "Submit was clicked, but no confirmation text was detected.",
-            )
+            return await _click_browser_submit(page, submit_button)
         except PlaywrightTimeoutError as exc:
             return KamernetReplyResult("timeout", str(exc))
         except Exception as exc:
@@ -232,6 +201,162 @@ class KamernetReplier:
             return KamernetReplyResult("error", str(exc))
         finally:
             await page.close()
+
+    async def _prepare_reply_form(self, page: Page, listing: Listing) -> Locator | KamernetReplyResult:
+        await page.goto(listing.url, wait_until="domcontentloaded", timeout=self.settings.timeout_seconds * 1000)
+        await _accept_cookies(page)
+
+        if await _needs_manual_verification(page):
+            return KamernetReplyResult("needs_verification", "Kamernet asked for manual verification.")
+
+        opened = await _open_contact_form(page)
+        if not opened:
+            return KamernetReplyResult("contact_button_not_found", "Could not find the Contact landlord button.")
+        await _accept_cookies(page)
+
+        if await _is_auth_page(page):
+            login_result = await self._login(page)
+            if login_result:
+                return login_result
+            await self._save_storage_state()
+            await page.goto(listing.url, wait_until="domcontentloaded", timeout=self.settings.timeout_seconds * 1000)
+            await _accept_cookies(page)
+            opened = await _open_contact_form(page)
+            if not opened:
+                return KamernetReplyResult(
+                    "contact_button_not_found",
+                    "Logged in, but could not reopen the Contact landlord form.",
+                )
+            await _accept_cookies(page)
+
+        if await _needs_manual_verification(page):
+            return KamernetReplyResult("needs_verification", "Kamernet asked for manual verification.")
+
+        await _fill_structured_answers(page, self.settings)
+
+        message_input = await _find_message_input(page, wait_for_visible=True)
+        if not message_input:
+            return KamernetReplyResult(
+                "message_field_not_found",
+                "Contact form opened, but no message field was detected.",
+            )
+
+        await message_input.fill(self.settings.message)
+        submit_button = await _first_visible(page.get_by_role("button", name=_SUBMIT_BUTTON_RE))
+        if not submit_button:
+            return KamernetReplyResult("submit_button_not_found", "No safe send button was detected.")
+        return submit_button
+
+    async def _submit_with_captured_api(self, page: Page, submit_button: Locator) -> KamernetReplyResult:
+        if not self._context:
+            return KamernetReplyResult("api_unavailable", "Kamernet browser context is not available.")
+
+        captured_request: dict | None = None
+        captured = asyncio.Event()
+
+        async def route_handler(route) -> None:
+            nonlocal captured_request
+            request = route.request
+            captured_request = {
+                "method": request.method,
+                "url": request.url,
+                "headers": dict(request.headers),
+                "post_data": request.post_data,
+            }
+            captured.set()
+            await route.abort()
+
+        route_pattern = "**/services/api/conversation/listing-reaction**"
+        await self._context.route(route_pattern, route_handler)
+        try:
+            await submit_button.click()
+            try:
+                await asyncio.wait_for(captured.wait(), timeout=min(10, self.settings.timeout_seconds))
+            except asyncio.TimeoutError:
+                return KamernetReplyResult(
+                    "api_unavailable",
+                    "Kamernet did not emit the listing-reaction API request after submit.",
+                )
+        finally:
+            try:
+                await self._context.unroute(route_pattern, route_handler)
+            except Exception:
+                pass
+
+        if not captured_request:
+            return KamernetReplyResult("api_unavailable", "Kamernet API request could not be captured.")
+
+        return await self._send_captured_api_request(captured_request)
+
+    async def _send_captured_api_request(self, captured_request: dict) -> KamernetReplyResult:
+        if not self._context:
+            return KamernetReplyResult("api_unavailable", "Kamernet browser context is not available.")
+
+        headers = _safe_replay_headers(captured_request.get("headers") or {})
+        post_data = captured_request.get("post_data") or ""
+        if not headers.get("authorization"):
+            return KamernetReplyResult("api_unavailable", "Kamernet submit request did not include an access token.")
+        if not post_data:
+            return KamernetReplyResult("api_unavailable", "Kamernet submit request did not include a JSON body.")
+
+        try:
+            json.loads(post_data)
+        except json.JSONDecodeError:
+            return KamernetReplyResult("api_unavailable", "Kamernet submit request body was not JSON.")
+
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.timeout_seconds, follow_redirects=True) as client:
+                await _copy_context_cookies(client, self._context)
+                response = await client.request(
+                    captured_request.get("method") or "POST",
+                    captured_request["url"],
+                    headers=headers,
+                    content=post_data,
+                )
+        except httpx.HTTPError as exc:
+            return KamernetReplyResult("api_error", str(exc))
+
+        detail = _trim_detail(response.text, self.settings)
+        if 200 <= response.status_code < 300:
+            return KamernetReplyResult(
+                "sent",
+                f"Kamernet accepted the listing-reaction API request ({response.status_code}).",
+            )
+        if response.status_code in {400, 409} and re.search(r"(already|conversation|sent)", detail, re.I):
+            return KamernetReplyResult("sent", "Kamernet API says this listing already has a conversation.")
+        if response.status_code in {401, 403}:
+            return KamernetReplyResult("api_auth_failed", f"{response.status_code}: {detail}")
+        if response.status_code == 429:
+            return KamernetReplyResult("api_rate_limited", f"429: {detail}")
+        if response.status_code == 400:
+            return KamernetReplyResult("api_validation_failed", detail)
+        return KamernetReplyResult("api_submit_failed", f"{response.status_code}: {detail}")
+
+    async def _submit_with_browser_fallback(
+        self,
+        page: Page,
+        listing: Listing,
+        api_result: KamernetReplyResult,
+    ) -> KamernetReplyResult:
+        prepared = await self._prepare_reply_form(page, listing)
+        if isinstance(prepared, KamernetReplyResult):
+            return KamernetReplyResult(
+                prepared.status,
+                f"API submit failed first ({api_result.status}: {api_result.detail}); "
+                f"browser fallback could not prepare the form: {prepared.detail}",
+            )
+
+        browser_result = await _click_browser_submit(page, prepared)
+        if browser_result.status in {"sent", "submitted_unconfirmed"}:
+            return KamernetReplyResult(
+                browser_result.status,
+                f"Browser fallback after API failure ({api_result.status}): {browser_result.detail}",
+            )
+        return KamernetReplyResult(
+            browser_result.status,
+            f"API submit failed first ({api_result.status}: {api_result.detail}); "
+            f"browser fallback result: {browser_result.detail}",
+        )
 
     async def _login(self, page: Page) -> KamernetReplyResult | None:
         await _switch_signup_to_login(page)
@@ -275,6 +400,65 @@ class KamernetReplier:
             return
         self.settings.storage_state_path.parent.mkdir(parents=True, exist_ok=True)
         await self._context.storage_state(path=str(self.settings.storage_state_path))
+
+
+async def _click_browser_submit(page: Page, submit_button: Locator) -> KamernetReplyResult:
+    await submit_button.click()
+    await _wait_for_quiet(page)
+    body_text = await _body_text(page)
+    if _SUCCESS_RE.search(body_text):
+        return KamernetReplyResult("sent", "Kamernet showed a send confirmation.")
+    if _SUBMIT_ERROR_RE.search(body_text):
+        return KamernetReplyResult("submit_failed", "Kamernet showed an error after submit.")
+    return KamernetReplyResult(
+        "submitted_unconfirmed",
+        "Submit was clicked, but no confirmation text was detected.",
+    )
+
+
+def _safe_replay_headers(headers: dict[str, str]) -> dict[str, str]:
+    allowed = {
+        "accept",
+        "authorization",
+        "content-type",
+        "origin",
+        "referer",
+        "x-csrf-token",
+        "x-requested-with",
+        "x-xsrf-token",
+    }
+    replay_headers = {
+        key: value
+        for key, value in headers.items()
+        if key.casefold() in allowed and value
+    }
+    replay_headers.setdefault(
+        "User-Agent",
+        (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+    )
+    return replay_headers
+
+
+async def _copy_context_cookies(client: httpx.AsyncClient, context: BrowserContext) -> None:
+    for cookie in await context.cookies(["https://kamernet.nl", "https://id.kamernet.nl"]):
+        name = cookie.get("name")
+        value = cookie.get("value")
+        if not name or value is None:
+            continue
+        domain = (cookie.get("domain") or "kamernet.nl").lstrip(".")
+        client.cookies.set(name, value, domain=domain, path=cookie.get("path") or "/")
+
+
+def _trim_detail(detail: str, settings: KamernetReplySettings, limit: int = 1000) -> str:
+    sanitized = detail or ""
+    for secret in (settings.message, settings.email, settings.password):
+        if secret:
+            sanitized = sanitized.replace(secret, "<redacted>")
+    return sanitized[:limit]
 
 
 async def _accept_cookies(page: Page) -> None:

@@ -74,6 +74,7 @@ KAMERNET_BROWSER_TIMEOUT_SECONDS = _parse_non_negative_int(
     os.getenv("KAMERNET_BROWSER_TIMEOUT_SECONDS"),
     45,
 )
+KAMERNET_API_REPLY_ENABLED = _parse_bool(os.getenv("KAMERNET_API_REPLY_ENABLED"), True)
 KAMERNET_STORAGE_STATE_PATH = os.getenv(
     "KAMERNET_STORAGE_STATE_PATH",
     str(Path(DB_PATH).with_name("kamernet_storage_state.json")),
@@ -145,6 +146,7 @@ ROOFZ_BROWSER_TIMEOUT_SECONDS = _parse_non_negative_int(
     45,
 )
 ROOFZ_PREAPPLICATION_ENABLED = _parse_bool(os.getenv("ROOFZ_PREAPPLICATION_ENABLED"), False)
+ROOFZ_PREAPPLICATION_API_ENABLED = _parse_bool(os.getenv("ROOFZ_PREAPPLICATION_API_ENABLED"), True)
 ROOFZ_PREAPPLICATION_POLL_SECONDS = _parse_non_negative_int(
     os.getenv("ROOFZ_PREAPPLICATION_POLL_SECONDS"),
     180,
@@ -174,6 +176,14 @@ ROOFZ_MAILTM_CONFIRMATION_SUBJECT_PATTERNS = tuple(
     ).split(",")
     if item.strip()
 )
+ROOFZ_OSRE_PREAPPLICATION_API_URL = os.getenv(
+    "ROOFZ_OSRE_PREAPPLICATION_API_URL",
+    "https://relet.portal.prd.osre.eu/portal/applications/pre-application",
+).strip()
+ROOFZ_OSRE_AVAILABILITY_API_BASE = os.getenv(
+    "ROOFZ_OSRE_AVAILABILITY_API_BASE",
+    "https://financial-check.portal.prd.osre.eu/portal/financial-check/check-availability",
+).rstrip("/")
 ROOFZ_INITIALS = os.getenv("ROOFZ_INITIALS", "N.G.").strip()
 ROOFZ_BIRTH_DATE = os.getenv("ROOFZ_BIRTH_DATE", "").strip()
 ROOFZ_RENT_TOGETHER = _parse_bool(os.getenv("ROOFZ_RENT_TOGETHER"), False)

@@ -93,6 +93,7 @@ Kamernet auto-reply variables:
 - `KAMERNET_REPLY_MAX_PER_SCAN`: optional, defaults to `0` for no cap; set a positive number to limit replies per scan
 - `KAMERNET_EXPECTED_TENANCY_DURATION`: optional, defaults to `1 year` when Kamernet asks for planned stay
 - `KAMERNET_EXPECTED_MOVE_DATE`: optional, defaults to `07/01/2026` for July 1, 2026 when Kamernet asks for move-in date
+- `KAMERNET_API_REPLY_ENABLED`: optional, defaults to `1`; captures Kamernet's authenticated submit request in Playwright, aborts the browser send, and replays it with `httpx`; browser submit remains the fallback
 - `KAMERNET_STORAGE_STATE_PATH`: optional, defaults beside `DB_PATH`; stores the Kamernet login session
 
 Funda auto-reply variables:
@@ -128,6 +129,9 @@ Roofz auto-reply variables:
 - `ROOFZ_MAILTM_PASSWORD`: mail.tm password for the official mail.tm API
 - `ROOFZ_MAILTM_FORWARDER_ADDRESS`: optional, defaults to `ROOFZ_EMAIL`; use this when Gmail forwards messages into mail.tm
 - `ROOFZ_PREAPPLICATION_ENABLED`: optional, set to `1` to poll mail.tm for Roofz pre-application links, complete the OSRE form, and check for a confirmation email after the first contact request
+- `ROOFZ_PREAPPLICATION_API_ENABLED`: optional, defaults to `1`; resolves OSRE email links and submits the pre-application through the OSRE API before falling back to browser automation
+- `ROOFZ_OSRE_PREAPPLICATION_API_URL`: optional, defaults to `https://relet.portal.prd.osre.eu/portal/applications/pre-application`
+- `ROOFZ_OSRE_AVAILABILITY_API_BASE`: optional, defaults to `https://financial-check.portal.prd.osre.eu/portal/financial-check/check-availability`
 - `ROOFZ_BIRTH_DATE`: required when pre-applications are enabled; use `DD-MM-YYYY`
 - `ROOFZ_INITIALS`: optional, defaults to `N.G.`
 - `ROOFZ_RENT_TOGETHER`: optional, defaults to `0`
@@ -202,6 +206,7 @@ KAMERNET_REPLY_MESSAGE_FILE=kamernet_reply_message.txt
 KAMERNET_REPLY_MAX_PER_SCAN=0
 KAMERNET_EXPECTED_TENANCY_DURATION=1 year
 KAMERNET_EXPECTED_MOVE_DATE=07/01/2026
+KAMERNET_API_REPLY_ENABLED=1
 ```
 
 If Kamernet rejects password login in headless browser mode, create a saved session once from a visible browser:
@@ -220,7 +225,7 @@ Run a one-listing dry-run before enabling live sends:
 python scripts/test_kamernet_reply.py "https://kamernet.nl/en/for-rent/studio-amsterdam/example/studio-1234567"
 ```
 
-The expected successful dry-run status is `dry_run_ready`. That means the bot logged in, opened the contact form, found the message field, filled the message, and skipped submit.
+The expected successful dry-run status is `dry_run_ready`. That means the bot logged in, opened the contact form, found the message field, filled the message, and skipped submit. In live mode, the bot prefers the captured Kamernet API request and falls back to a normal browser submit if the API request is unavailable or rejected.
 
 To allow a live send, set `KAMERNET_REPLY_DRY_RUN=0` and pass `--live` to the test script for one listing. The scanner also respects `KAMERNET_REPLY_DRY_RUN=0`, so only switch it after the one-listing live test behaves as expected.
 
@@ -254,7 +259,7 @@ Roofz replies use the same contact API used by the listing page. Run a one-listi
 python scripts/test_roofz_reply.py --url "https://www.roofz.eu/huur/woningen/jan-van-galenstraat-502"
 ```
 
-To allow a live Roofz send, set `ROOFZ_REPLY_DRY_RUN=0` and pass `--live` for one listing. The contact request should use your normal Roofz email in `ROOFZ_EMAIL`. Roofz pre-applications use the official mail.tm API to read forwarded follow-up emails, open the OSRE application link, fill the form, submit it, and then wait for a confirmation email. Configure the mail.tm inbox and the required OSRE answers:
+To allow a live Roofz send, set `ROOFZ_REPLY_DRY_RUN=0` and pass `--live` for one listing. The contact request should use your normal Roofz email in `ROOFZ_EMAIL`. Roofz pre-applications use the official mail.tm API to read forwarded follow-up emails, resolve the OSRE application link, submit the OSRE API payload, and then wait for a confirmation email. If the OSRE API changes or rejects the request, the bot falls back to the browser form filler. Configure the mail.tm inbox and the required OSRE answers:
 
 ```env
 ROOFZ_EMAIL=you@gmail.com
@@ -262,6 +267,7 @@ ROOFZ_MAILTM_ADDRESS=you@example.com
 ROOFZ_MAILTM_PASSWORD=replace-with-mailtm-password
 ROOFZ_MAILTM_FORWARDER_ADDRESS=you@gmail.com
 ROOFZ_PREAPPLICATION_ENABLED=1
+ROOFZ_PREAPPLICATION_API_ENABLED=1
 ROOFZ_BIRTH_DATE=DD-MM-YYYY
 ROOFZ_WORK_SITUATION=Student
 ROOFZ_MONTHLY_INCOME=800

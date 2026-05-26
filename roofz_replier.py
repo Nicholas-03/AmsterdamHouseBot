@@ -6,6 +6,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
@@ -35,8 +36,11 @@ class RoofzReplySettings:
     headless: bool
     timeout_seconds: int
     preapplication_enabled: bool
+    preapplication_api_enabled: bool
     preapplication_poll_seconds: int
     preapplication_poll_interval_seconds: int
+    preapplication_api_url: str
+    preapplication_availability_api_base: str
     mailtm: MailTmSettings
     initials: str
     birth_date: str
@@ -72,8 +76,11 @@ class RoofzReplySettings:
             headless=config.ROOFZ_BROWSER_HEADLESS,
             timeout_seconds=max(5, config.ROOFZ_BROWSER_TIMEOUT_SECONDS),
             preapplication_enabled=config.ROOFZ_PREAPPLICATION_ENABLED,
+            preapplication_api_enabled=config.ROOFZ_PREAPPLICATION_API_ENABLED,
             preapplication_poll_seconds=config.ROOFZ_PREAPPLICATION_POLL_SECONDS,
             preapplication_poll_interval_seconds=max(1, config.ROOFZ_PREAPPLICATION_POLL_INTERVAL_SECONDS),
+            preapplication_api_url=config.ROOFZ_OSRE_PREAPPLICATION_API_URL,
+            preapplication_availability_api_base=config.ROOFZ_OSRE_AVAILABILITY_API_BASE,
             mailtm=MailTmSettings.from_config(),
             initials=config.ROOFZ_INITIALS,
             birth_date=config.ROOFZ_BIRTH_DATE,
@@ -113,6 +120,8 @@ class RoofzReplySettings:
                 return "ROOFZ_BIRTH_DATE is missing."
             if not self.monthly_income:
                 return "ROOFZ_MONTHLY_INCOME is missing."
+            if self.preapplication_api_enabled and not self.preapplication_api_url:
+                return "ROOFZ_OSRE_PREAPPLICATION_API_URL is missing."
             return self.mailtm.ready_error()
         return None
 
@@ -232,6 +241,87 @@ class RoofzReplier:
             await asyncio.sleep(self.settings.preapplication_poll_interval_seconds)
 
     async def complete_preapplication(self, application_url: str) -> RoofzReplyResult:
+        api_result: RoofzReplyResult | None = None
+        if self.settings.preapplication_api_enabled:
+            api_result = await self._complete_preapplication_with_api(application_url)
+            if api_result.status in {
+                "preapplication_sent",
+                "preapplication_submitted_unconfirmed",
+                "preapplication_dry_run_ready",
+            }:
+                return api_result
+            logger.warning(
+                "Roofz OSRE API pre-application failed for %s (%s); falling back to browser.",
+                application_url,
+                api_result.detail,
+            )
+
+        return await self._complete_preapplication_with_browser(application_url, api_result)
+
+    async def _complete_preapplication_with_api(self, application_url: str) -> RoofzReplyResult:
+        invitation = _parse_osre_invitation(application_url)
+        if not invitation:
+            resolved_url = await _resolve_redirected_url(application_url, self.settings.timeout_seconds)
+            invitation = _parse_osre_invitation(resolved_url)
+        if not invitation:
+            return RoofzReplyResult(
+                "preapplication_api_unavailable",
+                "Could not parse the OSRE invitation id and token from the pre-application URL.",
+            )
+
+        payload = _build_preapplication_payload(self.settings, invitation["invitation_id"])
+        if self.settings.dry_run:
+            return RoofzReplyResult(
+                "preapplication_dry_run_ready",
+                "Roofz OSRE pre-application API payload is complete; submit was skipped.",
+            )
+
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "Origin": invitation["origin"],
+            "Referer": f"{invitation['origin']}/",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.timeout_seconds, follow_redirects=True) as client:
+                if invitation["token"] and self.settings.preapplication_availability_api_base:
+                    await client.put(
+                        f"{self.settings.preapplication_availability_api_base}/{invitation['token']}",
+                        headers={
+                            "Accept": "application/json, text/plain, */*",
+                            "Origin": invitation["origin"],
+                            "Referer": f"{invitation['origin']}/",
+                            "User-Agent": headers["User-Agent"],
+                        },
+                    )
+                response = await client.post(self.settings.preapplication_api_url, headers=headers, json=payload)
+        except httpx.HTTPError as exc:
+            return RoofzReplyResult("preapplication_api_error", str(exc))
+
+        detail = _trim_detail(response.text, self.settings)
+        if 200 <= response.status_code < 300:
+            return RoofzReplyResult(
+                "preapplication_sent",
+                f"Roofz OSRE accepted the pre-application API request ({response.status_code}).",
+            )
+        if response.status_code in {400, 409} and re.search(r"(already|submitted|duplicate)", detail, re.I):
+            return RoofzReplyResult("preapplication_sent", "Roofz OSRE says the pre-application is already submitted.")
+        if response.status_code == 400:
+            return RoofzReplyResult("preapplication_validation_failed", detail)
+        if response.status_code in {401, 403, 429}:
+            return RoofzReplyResult("preapplication_blocked", f"{response.status_code}: {detail}")
+        return RoofzReplyResult("preapplication_submit_failed", f"{response.status_code}: {detail}")
+
+    async def _complete_preapplication_with_browser(
+        self,
+        application_url: str,
+        api_result: RoofzReplyResult | None,
+    ) -> RoofzReplyResult:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=self.settings.headless)
             page = await browser.new_page(viewport={"width": 1440, "height": 1200})
@@ -265,10 +355,13 @@ class RoofzReplier:
                         await _wait_for_quiet(page)
                         text = await _body_text(page)
                         if re.search(r"(thank you|submitted|application.*received|success|bedankt|verzonden|sent)", text, re.I):
-                            return RoofzReplyResult("preapplication_sent", "Roofz showed a pre-application confirmation.")
+                            return _with_api_context(
+                                RoofzReplyResult("preapplication_sent", "Roofz showed a pre-application confirmation."),
+                                api_result,
+                            )
                         return RoofzReplyResult(
                             "preapplication_submitted_unconfirmed",
-                            "Submit was clicked, but no confirmation text was detected.",
+                            _with_api_detail("Submit was clicked, but no confirmation text was detected.", api_result),
                         )
 
                     continue_button = await _first_button(
@@ -290,12 +383,15 @@ class RoofzReplier:
                     await continue_button.click()
                     await _wait_for_quiet(page)
 
-                return RoofzReplyResult("preapplication_too_many_steps", "The pre-application had more steps than expected.")
+                return RoofzReplyResult(
+                    "preapplication_too_many_steps",
+                    _with_api_detail("The pre-application had more steps than expected.", api_result),
+                )
             except PlaywrightTimeoutError as exc:
-                return RoofzReplyResult("preapplication_timeout", str(exc))
+                return RoofzReplyResult("preapplication_timeout", _with_api_detail(str(exc), api_result))
             except Exception as exc:
                 logger.exception("Roofz pre-application failed for %s", application_url)
-                return RoofzReplyResult("preapplication_error", str(exc))
+                return RoofzReplyResult("preapplication_error", _with_api_detail(str(exc), api_result))
             finally:
                 await browser.close()
 
@@ -316,6 +412,174 @@ def _build_contact_payload(settings: RoofzReplySettings, property_id: str) -> di
             },
         },
     }
+
+
+def _parse_osre_invitation(application_url: str) -> dict[str, str] | None:
+    parsed = urlparse(application_url)
+    parts = [part for part in parsed.path.split("/") if part]
+    try:
+        invitation_index = parts.index("invitation")
+        token_index = parts.index("token")
+    except ValueError:
+        return None
+    if invitation_index + 1 >= len(parts) or token_index + 1 >= len(parts):
+        return None
+    return {
+        "origin": f"{parsed.scheme}://{parsed.netloc}",
+        "invitation_id": parts[invitation_index + 1],
+        "token": parts[token_index + 1],
+    }
+
+
+async def _resolve_redirected_url(application_url: str, timeout_seconds: int) -> str:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
+            response = await client.get(application_url, headers=headers)
+            return str(response.url)
+    except httpx.HTTPError:
+        return application_url
+
+
+def _build_preapplication_payload(settings: RoofzReplySettings, invitation_id: str) -> dict:
+    return {
+        "invitationId": invitation_id,
+        "application": {
+            "person": {
+                "personalDetails": {
+                    "initials": settings.initials,
+                    "firstName": settings.first_name,
+                    "insertion": "",
+                    "lastName": settings.last_name,
+                    "email": settings.email,
+                    "phoneNumber": settings.phone_number,
+                    "dateOfBirth": _normalize_date(settings.birth_date),
+                    "gender": _normalize_gender(settings.gender),
+                    "livingSituation": None,
+                },
+                "address": {
+                    "country": None,
+                    "street": None,
+                    "houseNumber": None,
+                    "houseNumberExtension": None,
+                    "postalCode": None,
+                    "city": None,
+                },
+                "idDocument": {
+                    "idDocumentType": None,
+                    "idDocumentNumber": None,
+                    "idIssueDate": None,
+                    "idExpirationDate": None,
+                    "idIssueCountry": None,
+                    "cityOfBirth": None,
+                },
+                "workSituation": {
+                    "workSituation": _normalize_work_situation(settings.work_situation),
+                    "workMonthlySalary": _parse_amount(settings.monthly_income),
+                },
+                "employment": {
+                    "employerName": None,
+                    "workJobTitle": None,
+                    "employerContactName": None,
+                    "employerPhoneNumber": None,
+                },
+                "financialSituation": {
+                    "financialSavings": _parse_amount(settings.savings),
+                    "financialCredits": 0,
+                    "bankName": None,
+                    "bankAccount": None,
+                    "otherBankName": None,
+                    "otherBankAccount": None,
+                    "annualIncomeYear": None,
+                    "annualIncome": _parse_amount(settings.annual_income),
+                },
+            },
+            "partnerSituation": bool(settings.rent_together),
+            "partner": None,
+            "currentHousingSituation": None,
+            "familyComposition": None,
+            "maritalState": None,
+        },
+    }
+
+
+def _normalize_date(value: str) -> str:
+    from datetime import datetime
+
+    normalized = value.strip()
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(normalized, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return normalized
+
+
+def _normalize_gender(value: str) -> str | None:
+    normalized = value.casefold().strip()
+    if normalized in {"male", "man", "m"}:
+        return "male"
+    if normalized in {"female", "woman", "f"}:
+        return "female"
+    return normalized or None
+
+
+def _normalize_work_situation(value: str) -> str:
+    normalized = value.casefold().strip()
+    if "student" in normalized:
+        return "student"
+    if "self" in normalized or "entrepreneur" in normalized or "freelance" in normalized:
+        return "entrepreneur"
+    if "unemployed" in normalized:
+        return "unemployed"
+    if "retired" in normalized:
+        return "retired"
+    if "work" in normalized or "employ" in normalized:
+        return "employed"
+    return normalized or "student"
+
+
+def _parse_amount(value: str) -> int:
+    normalized = value.strip()
+    if not normalized:
+        return 0
+    normalized = normalized.replace(".", "").replace(",", ".")
+    match = re.search(r"-?\d+(?:\.\d+)?", normalized)
+    if not match:
+        return 0
+    return int(float(match.group(0)))
+
+
+def _with_api_context(result: RoofzReplyResult, api_result: RoofzReplyResult | None) -> RoofzReplyResult:
+    return RoofzReplyResult(result.status, _with_api_detail(result.detail, api_result))
+
+
+def _with_api_detail(detail: str, api_result: RoofzReplyResult | None) -> str:
+    if not api_result:
+        return detail
+    return f"Browser fallback after API failure ({api_result.status}: {api_result.detail}): {detail}"
+
+
+def _trim_detail(detail: str, settings: RoofzReplySettings, limit: int = 1000) -> str:
+    sanitized = detail or ""
+    for secret in (
+        settings.email,
+        settings.phone_number,
+        settings.message,
+        settings.birth_date,
+        settings.monthly_income,
+        settings.annual_income,
+        settings.savings,
+    ):
+        if secret:
+            sanitized = sanitized.replace(secret, "<redacted>")
+    return sanitized[:limit]
 
 
 async def _fill_preapplication_form(page, settings: RoofzReplySettings) -> None:

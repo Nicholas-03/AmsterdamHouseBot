@@ -31,6 +31,7 @@ def _settings(**overrides) -> KamernetReplySettings:
         "expected_move_date": "07/01/2026",
         "headless": True,
         "timeout_seconds": 10,
+        "api_reply_enabled": True,
         "storage_state_path": missing_storage_state_path,
     }
     values.update(overrides)
