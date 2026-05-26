@@ -148,7 +148,14 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                 )
                 return new_count
 
-            await db.log_event("scraper_started", chat_id=chat_id, source=scraper.SOURCE, status="started")
+            scraper_data = _scraper_event_data(scraper, user_filters)
+            await db.log_event(
+                "scraper_started",
+                chat_id=chat_id,
+                source=scraper.SOURCE,
+                status="started",
+                data=scraper_data,
+            )
             listings = await scraper.scrape()
             new_from_scraper = 0
             for listing in listings:
@@ -267,7 +274,11 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                     chat_id=chat_id,
                     source=scraper.SOURCE,
                     status="ok",
-                    data={"listing_count": len(listings), "new_count": new_from_scraper},
+                    data={
+                        "listing_count": len(listings),
+                        "new_count": new_from_scraper,
+                        **scraper_data,
+                    },
                 )
         except Exception as exc:
             logger.error("Scraper %s failed for user %s: %s", scraper.SOURCE, chat_id, exc)
@@ -287,6 +298,24 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
         data={"new_count": new_count, "reply_attempts": reply_attempts},
     )
     return new_count
+
+
+def _scraper_event_data(scraper, user_filters: dict) -> dict:
+    data = {
+        "city": user_filters.get("city"),
+        "max_price": user_filters.get("max_price"),
+        "min_bedrooms": user_filters.get("min_bedrooms"),
+        "min_size_m2": user_filters.get("min_size_m2"),
+    }
+    if scraper.SOURCE == KamernetScraper.SOURCE:
+        data["kamernet_property_type"] = user_filters.get("kamernet_property_type", "any")
+    build_url = getattr(scraper, "_build_url", None)
+    if callable(build_url):
+        try:
+            data["search_url"] = build_url()
+        except Exception as exc:
+            data["search_url_error"] = str(exc)
+    return data
 
 
 async def _maybe_auto_reply_to_listing(
