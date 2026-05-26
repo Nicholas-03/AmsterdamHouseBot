@@ -42,7 +42,7 @@ _SUBMIT_BUTTON_RE = re.compile(
 )
 _MESSAGE_FIELD_RE = re.compile(r"(message|bericht|motivation|introduce|reaction|response)", re.I)
 _SUCCESS_RE = re.compile(
-    r"(message sent|sent successfully|your message has been sent|bericht verzonden|reactie verzonden)",
+    r"(message sent|sent successfully|your message has been sent|continue conversation|bericht verzonden|reactie verzonden)",
     re.I,
 )
 _VERIFICATION_RE = re.compile(
@@ -139,6 +139,7 @@ class KamernetReplier:
         context_kwargs = {
             "locale": "en-US",
             "timezone_id": "Europe/Amsterdam",
+            "viewport": {"width": 1280, "height": 1200},
         }
         if self.settings.storage_state_path.exists():
             context_kwargs["storage_state"] = str(self.settings.storage_state_path)
@@ -176,6 +177,7 @@ class KamernetReplier:
             opened = await _open_contact_form(page)
             if not opened:
                 return KamernetReplyResult("contact_button_not_found", "Could not find the Contact landlord button.")
+            await _accept_cookies(page)
 
             if await _is_auth_page(page):
                 login_result = await self._login(page)
@@ -190,13 +192,14 @@ class KamernetReplier:
                         "contact_button_not_found",
                         "Logged in, but could not reopen the Contact landlord form.",
                 )
+                await _accept_cookies(page)
 
             if await _needs_manual_verification(page):
                 return KamernetReplyResult("needs_verification", "Kamernet asked for manual verification.")
 
             await _fill_structured_answers(page, self.settings)
 
-            message_input = await _find_message_input(page)
+            message_input = await _find_message_input(page, wait_for_visible=True)
             if not message_input:
                 return KamernetReplyResult(
                     "message_field_not_found",
@@ -276,11 +279,15 @@ class KamernetReplier:
 
 async def _accept_cookies(page: Page) -> None:
     for pattern in (re.compile(r"accept all", re.I), re.compile(r"accept", re.I)):
-        button = await _first_visible(page.get_by_role("button", name=pattern))
-        if button:
-            await button.click()
-            await page.wait_for_timeout(500)
-            return
+        for locator in (
+            page.get_by_role("button", name=pattern),
+            page.locator("button").filter(has_text=pattern),
+        ):
+            button = await _first_visible(locator)
+            if button:
+                await button.click()
+                await page.wait_for_timeout(500)
+                return
 
 
 async def _open_contact_form(page: Page) -> bool:
@@ -318,21 +325,36 @@ async def _is_auth_page(page: Page) -> bool:
     return await _first_visible(auth_heading) is not None
 
 
-async def _find_message_input(page: Page) -> Locator | None:
-    label_match = await _first_visible(page.get_by_label(_MESSAGE_FIELD_RE))
-    if label_match:
-        return label_match
+async def _find_message_input(page: Page, wait_for_visible: bool = False) -> Locator | None:
+    locators = (
+        page.get_by_label(_MESSAGE_FIELD_RE),
+        page.locator("#message"),
+        page.locator("textarea[name='message']"),
+        page.locator("textarea"),
+        page.locator("[contenteditable='true']"),
+    )
 
-    textarea = await _first_visible(page.locator("textarea"))
-    if textarea:
-        return textarea
+    for locator in locators:
+        match = await _first_visible(locator)
+        if match:
+            return match
 
-    editable = await _first_visible(page.locator("[contenteditable='true']"))
-    if editable:
-        return editable
+    if wait_for_visible:
+        for locator in locators[1:]:
+            match = await _first_visible_after_wait(locator)
+            if match:
+                return match
 
     return None
 
+
+async def _first_visible_after_wait(locator: Locator, timeout_ms: int = 3000) -> Locator | None:
+    try:
+        first = locator.first
+        await first.wait_for(state="visible", timeout=timeout_ms)
+        return first
+    except Exception:
+        return await _first_visible(locator)
 
 async def _fill_structured_answers(page: Page, settings: KamernetReplySettings) -> None:
     if settings.expected_tenancy_duration:

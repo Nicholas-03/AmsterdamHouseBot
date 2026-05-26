@@ -208,6 +208,8 @@ python scripts/kamernet_save_session.py
 
 The script logs in with `KAMERNET_EMAIL` and `KAMERNET_PASSWORD` when they are set. It saves the Kamernet session to `KAMERNET_STORAGE_STATE_PATH`, and the bot reuses that session for dry-run and live replies. If the session expires, run the script again.
 
+For VPS deployments, the saved Kamernet session is intentionally not committed or uploaded by `scripts/deploy.ps1`. Copy it to the production `KAMERNET_STORAGE_STATE_PATH` separately and keep it readable only by the bot service user, for example `/var/lib/amsterdam-house-bot/kamernet_storage_state.json` owned by `amsterdambot`.
+
 Run a one-listing dry-run before enabling live sends:
 
 ```bash

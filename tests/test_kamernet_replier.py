@@ -10,6 +10,7 @@ import scanner
 from kamernet_replier import (
     KamernetReplyResult,
     KamernetReplySettings,
+    _SUCCESS_RE,
     _normalize_text,
     should_skip_existing_reply,
 )
@@ -81,6 +82,9 @@ class KamernetReplySettingsTests(unittest.TestCase):
     def test_normalize_text_ignores_case_and_spacing(self):
         self.assertEqual(_normalize_text("  1   Year "), "1 year")
 
+    def test_success_pattern_accepts_existing_conversation_state(self):
+        self.assertRegex("Continue conversation", _SUCCESS_RE)
+
 
 class FakeReplier:
     def __init__(self, settings):
@@ -99,6 +103,11 @@ class FakeReplier:
 class FakeWarningReplier(FakeReplier):
     async def reply_to_listing(self, listing):
         return KamernetReplyResult("confirmation_missing", "no mail")
+
+
+class FakeLoginFailedReplier(FakeReplier):
+    async def reply_to_listing(self, listing):
+        return KamernetReplyResult("login_failed", "Kamernet rejected the login credentials.")
 
 
 class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
@@ -171,6 +180,52 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(attempted)
         bot.send_message.assert_awaited_once()
         self.assertIn("confirmation_missing", bot.send_message.await_args.kwargs["text"])
+        self.assertIn(_listing().url, bot.send_message.await_args.kwargs["text"])
+
+    async def test_auto_reply_sends_warning_for_kamernet_login_failure(self):
+        bot = AsyncMock()
+        with (
+            patch.object(scanner.db, "get_auto_reply", AsyncMock(return_value=None)),
+            patch.object(scanner.db, "mark_auto_reply_result", AsyncMock()),
+        ):
+            attempted = await scanner._maybe_auto_reply_to_listing(
+                123,
+                _listing(),
+                _settings(dry_run=False),
+                None,
+                attempts_so_far=0,
+                replier_cls=FakeLoginFailedReplier,
+                result_cls=KamernetReplyResult,
+                source_label="Kamernet",
+                bot=bot,
+            )
+
+        self.assertTrue(attempted)
+        bot.send_message.assert_awaited_once()
+        text = bot.send_message.await_args.kwargs["text"]
+        self.assertIn("login_failed", text)
+        self.assertIn(_listing().url, text)
+
+    async def test_auto_reply_does_not_warn_for_dry_run_result(self):
+        bot = AsyncMock()
+        with (
+            patch.object(scanner.db, "get_auto_reply", AsyncMock(return_value=None)),
+            patch.object(scanner.db, "mark_auto_reply_result", AsyncMock()),
+        ):
+            attempted = await scanner._maybe_auto_reply_to_listing(
+                123,
+                _listing(),
+                _settings(dry_run=True),
+                None,
+                attempts_so_far=0,
+                replier_cls=FakeReplier,
+                result_cls=KamernetReplyResult,
+                source_label="Kamernet",
+                bot=bot,
+            )
+
+        self.assertTrue(attempted)
+        bot.send_message.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -21,13 +21,12 @@ from scrapers.roofz import RoofzScraper
 
 logger = logging.getLogger(__name__)
 
-_AUTO_REPLY_WARNING_STATUSES = {
-    "confirmation_error",
-    "confirmation_missing",
-    "sent_preapplication_pending",
-    "sent_preapplication_failed",
-    "preapplication_confirmation_missing",
-    "preapplication_validation_failed",
+_AUTO_REPLY_OK_STATUSES = {
+    "dry_run_ready",
+    "sent",
+    "confirmation_confirmed",
+    "preapplication_confirmed",
+    "preapplication_sent",
 }
 
 
@@ -126,6 +125,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                             KamernetReplier,
                             KamernetReplyResult,
                             "Kamernet",
+                            bot,
                         )
                         if attempted:
                             reply_attempts[KamernetScraper.SOURCE] += 1
@@ -139,6 +139,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                             FundaReplier,
                             FundaReplyResult,
                             "Funda",
+                            bot,
                         )
                         if attempted:
                             reply_attempts[FundaScraper.SOURCE] += 1
@@ -237,17 +238,24 @@ async def _maybe_auto_reply_to_listing(
         result.status,
         result.detail,
     )
-    if bot and result.status in _AUTO_REPLY_WARNING_STATUSES:
+    if bot and _should_warn_auto_reply(result.status, settings.dry_run):
         await bot.send_message(
             chat_id=chat_id,
             text=(
                 f"Warning: {source_label} auto-reply needs attention for {listing.title}.\n"
                 f"Status: {result.status}\n"
-                f"Detail: {result.detail}"
+                f"Detail: {result.detail}\n"
+                f"Listing: {listing.url}"
             ),
             disable_web_page_preview=True,
         )
     return True
+
+
+def _should_warn_auto_reply(status: str, dry_run: bool) -> bool:
+    if dry_run:
+        return False
+    return status not in _AUTO_REPLY_OK_STATUSES
 
 
 async def _scan_is_current(chat_id: int, user_filters: dict, require_active: bool) -> bool:
