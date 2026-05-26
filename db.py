@@ -10,6 +10,7 @@ from scrapers.kamernet import serialize_kamernet_property_types
 logger = logging.getLogger(__name__)
 
 BOT_EVENT_RETENTION_DAYS = 3
+STALE_AUTO_REPLY_ATTEMPT_MINUTES = 30
 _BOT_EVENT_TEXT_LIMIT = 2000
 _BOT_EVENT_DATA_LIMIT = 4000
 
@@ -128,7 +129,7 @@ async def init_db():
                 SET auto_reply_enabled = kamernet_auto_reply
                 WHERE auto_reply_enabled = 0 AND kamernet_auto_reply = 1
             """)
-        await _prune_bot_events(db)
+        await _run_maintenance(db)
         await db.commit()
 
 
@@ -320,6 +321,15 @@ async def prune_bot_events() -> None:
         logger.warning("Could not prune bot events: %s", exc)
 
 
+async def run_maintenance() -> None:
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await _run_maintenance(db)
+            await db.commit()
+    except Exception as exc:
+        logger.warning("Could not run database maintenance: %s", exc)
+
+
 async def get_recent_bot_events(limit: int = 50) -> list[dict]:
     limit = max(1, min(limit, 200))
     async with aiosqlite.connect(DB_PATH) as db:
@@ -379,6 +389,46 @@ async def _prune_bot_events(db: aiosqlite.Connection) -> None:
         "DELETE FROM bot_events WHERE created_at < datetime('now', ?)",
         (f"-{BOT_EVENT_RETENTION_DAYS} days",),
     )
+
+
+async def _run_maintenance(db: aiosqlite.Connection) -> None:
+    await _prune_bot_events(db)
+    stale_count = await _mark_stale_auto_reply_attempts(db)
+    if stale_count:
+        await _insert_bot_event(
+            db,
+            "stale_auto_replies_marked",
+            level="warning",
+            chat_id=None,
+            source=None,
+            listing_id=None,
+            title="",
+            status="marked_interrupted",
+            detail="Marked old auto-reply attempts as interrupted.",
+            data={
+                "count": stale_count,
+                "timeout_minutes": STALE_AUTO_REPLY_ATTEMPT_MINUTES,
+            },
+        )
+
+
+async def _mark_stale_auto_reply_attempts(db: aiosqlite.Connection) -> int:
+    cursor = await db.execute(
+        """
+        UPDATE auto_replies
+        SET
+            status='error',
+            error=CASE
+                WHEN error IS NOT NULL AND length(trim(error)) > 0 THEN error
+                ELSE 'Auto-reply attempt was interrupted before completion.'
+            END,
+            updated_at=CURRENT_TIMESTAMP
+        WHERE status='attempting'
+          AND attempted_at < datetime('now', ?)
+        """,
+        (f"-{STALE_AUTO_REPLY_ATTEMPT_MINUTES} minutes",),
+    )
+    return max(0, cursor.rowcount)
 
 
 async def set_auto_reply(chat_id: int, enabled: bool) -> None:

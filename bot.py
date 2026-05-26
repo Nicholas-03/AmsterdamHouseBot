@@ -89,7 +89,7 @@ def create_application() -> Application:
 
 
 async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
-    await db.prune_bot_events()
+    await db.run_maintenance()
     users = await db.get_all_active_users()
     if config.TELEGRAM_ALLOWED_CHAT_IDS:
         users = [user for user in users if user["chat_id"] in config.TELEGRAM_ALLOWED_CHAT_IDS]

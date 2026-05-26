@@ -88,6 +88,40 @@ class BotEventLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply["reply_latency_seconds"], 5)
         self.assertEqual(reply["confirmation_latency_seconds"], 35)
 
+    async def test_maintenance_marks_stale_attempting_auto_replies(self):
+        await db.init_db()
+        await db.mark_auto_reply_result(
+            "kamernet",
+            "stale",
+            "https://example.test",
+            123,
+            "attempting",
+            False,
+        )
+
+        con = sqlite3.connect(db.DB_PATH)
+        try:
+            con.execute(
+                """
+                UPDATE auto_replies
+                SET attempted_at=datetime('now', '-31 minutes'), updated_at=datetime('now', '-31 minutes')
+                WHERE source='kamernet' AND listing_id='stale'
+                """
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        await db.run_maintenance()
+
+        reply = await db.get_auto_reply("kamernet", "stale")
+        events = await db.get_recent_bot_events()
+
+        self.assertEqual(reply["status"], "error")
+        self.assertEqual(reply["error"], "Auto-reply attempt was interrupted before completion.")
+        self.assertEqual(events[0]["event_type"], "stale_auto_replies_marked")
+        self.assertEqual(events[0]["status"], "marked_interrupted")
+
 
 if __name__ == "__main__":
     unittest.main()

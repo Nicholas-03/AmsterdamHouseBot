@@ -7,18 +7,9 @@ from urllib.parse import urlencode, urljoin
 from bs4 import BeautifulSoup
 
 from .base import BaseScraper, Listing, parse_euro_amount, parse_first_int
+from ._resilient_fetch import fetch_html
 
 logger = logging.getLogger(__name__)
-
-try:
-    from curl_cffi.requests import AsyncSession as CurlAsyncSession
-
-    _USE_CURL = True
-except ImportError:
-    import httpx
-
-    _USE_CURL = False
-    logger.warning("curl_cffi is not installed; Huurwoningen may return Cloudflare challenges.")
 
 _HEADERS = {
     "Accept-Language": "en-US,en;q=0.9,nl-NL;q=0.8,nl;q=0.7",
@@ -58,16 +49,7 @@ class HuurwoningenScraper(BaseScraper):
         try:
             await asyncio.sleep(random.uniform(1.0, 3.0))
             url = self._build_url()
-            if _USE_CURL:
-                async with CurlAsyncSession(impersonate="chrome124") as session:
-                    response = await session.get(url, headers=_HEADERS, timeout=30)
-                    response.raise_for_status()
-                    html = response.text
-            else:
-                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                    response = await client.get(url, headers=_HEADERS)
-                    response.raise_for_status()
-                    html = response.text
+            html = await fetch_html(url, _HEADERS, source=self.SOURCE, timeout=30)
 
             soup = BeautifulSoup(html, "lxml")
             listings = [
