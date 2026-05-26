@@ -12,6 +12,17 @@ logger = logging.getLogger(__name__)
 class FundaScraper(BaseScraper):
     SOURCE = "funda"
 
+    def __init__(
+        self,
+        city: str = "Amsterdam",
+        max_price: int = 2000,
+        min_bedrooms: int = 1,
+        min_size_m2: int = 0,
+        keywords: str | Iterable[str] | None = None,
+    ):
+        super().__init__(city, max_price, min_bedrooms, min_size_m2)
+        self.keywords = _normalize_keywords(keywords)
+
     async def scrape(self) -> list[Listing]:
         self.last_error = ""
         try:
@@ -46,6 +57,8 @@ class FundaScraper(BaseScraper):
 
         with client_cls(timeout=30, max_retries=5, retry_backoff=0.2) as client:
             raw_listings = client.search(self.city.lower(), **filters)
+            if self.keywords:
+                raw_listings = self._filter_by_keywords(client, raw_listings)
 
         listings: list[Listing] = []
         seen_ids: set[str] = set()
@@ -56,6 +69,32 @@ class FundaScraper(BaseScraper):
             seen_ids.add(listing.id)
             listings.append(listing)
         return listings
+
+    def _filter_by_keywords(self, client, raw_listings) -> list:
+        matching = []
+        for raw_listing in raw_listings:
+            if self._listing_matches_keywords(client, raw_listing):
+                matching.append(raw_listing)
+        logger.info(
+            "Funda: %d of %d listings matched keywords: %s",
+            len(matching),
+            len(raw_listings),
+            ", ".join(self.keywords),
+        )
+        return matching
+
+    def _listing_matches_keywords(self, client, raw_listing) -> bool:
+        search_text = _funda_listing_search_text(raw_listing)
+        try:
+            listing_id = _listing_id(raw_listing, _listing_url(raw_listing))
+            detail = client.listing(listing_id) if listing_id else None
+        except Exception as exc:
+            logger.warning("Funda detail lookup failed during keyword filter: %s", exc)
+            detail = None
+
+        detail_text = _funda_listing_search_text(detail) if detail else ""
+        haystack = f"{search_text}\n{detail_text}".casefold()
+        return all(keyword.casefold() in haystack for keyword in self.keywords)
 
     def _convert_listing(self, raw_listing) -> Listing | None:
         url = _listing_url(raw_listing)
@@ -210,3 +249,79 @@ def _first_photo_url(media) -> str | None:
             if text:
                 return text
     return None
+
+
+def _normalize_keywords(keywords: str | Iterable[str] | None) -> tuple[str, ...]:
+    if keywords is None:
+        return ()
+    values = re.split(r"[,;\n]+", keywords) if isinstance(keywords, str) else keywords
+    normalized = []
+    for value in values:
+        keyword = " ".join(str(value).strip().split())
+        if keyword and keyword not in normalized:
+            normalized.append(keyword)
+    return tuple(normalized)
+
+
+def _funda_listing_search_text(raw_listing) -> str:
+    if raw_listing is None:
+        return ""
+
+    parts = [
+        _first_text(getattr(raw_listing, "title", None)),
+        _first_text(getattr(raw_listing, "description_title", None)),
+        _first_text(getattr(raw_listing, "description", None)),
+        _first_text(getattr(raw_listing, "highlight", None)),
+        _first_text(getattr(raw_listing, "city", None)),
+    ]
+
+    labels = getattr(raw_listing, "labels", None) or ()
+    for label in labels:
+        parts.append(_first_text(getattr(label, "text", None)))
+
+    property_details = getattr(raw_listing, "property_details", None)
+    if property_details:
+        parts.append(_first_text(getattr(property_details, "object_type", None)))
+        parts.append(_first_text(getattr(property_details, "construction_type", None)))
+        parts.extend(_flatten_text_values(getattr(property_details, "features", None)))
+
+    characteristics = getattr(raw_listing, "characteristics", None) or ()
+    for section in characteristics:
+        parts.append(_first_text(getattr(section, "title", None)))
+        for item in getattr(section, "items", ()) or ():
+            parts.extend(_characteristic_text(item))
+
+    raw = getattr(raw_listing, "raw", None)
+    if isinstance(raw, dict):
+        parts.extend(_flatten_text_values(raw.get("ListingDescription")))
+
+    return "\n".join(part for part in parts if part)
+
+
+def _characteristic_text(item) -> list[str]:
+    parts = [
+        _first_text(getattr(item, "label", None)),
+        _first_text(getattr(item, "value", None)),
+    ]
+    for child in getattr(item, "children", ()) or ():
+        parts.extend(_characteristic_text(child))
+    return [part for part in parts if part]
+
+
+def _flatten_text_values(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        values = []
+        for child in value.values():
+            values.extend(_flatten_text_values(child))
+        return values
+    if isinstance(value, Iterable):
+        values = []
+        for child in value:
+            values.extend(_flatten_text_values(child))
+        return values
+    text = _first_text(value)
+    return [text] if text else []

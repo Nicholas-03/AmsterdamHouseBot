@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from telegram import Bot
 from telegram.constants import ParseMode
 
+import config
 import db
 from funda_replier import FundaReplier, FundaReplyResult, FundaReplySettings
 from kamernet_replier import (
@@ -107,6 +108,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
             max_price=user_filters["max_price"],
             min_bedrooms=user_filters["min_bedrooms"],
             min_size_m2=user_filters["min_size_m2"],
+            keywords=config.FUNDA_KEYWORDS,
         ),
         KamernetScraper(
             city=user_filters["city"],
@@ -309,6 +311,8 @@ def _scraper_event_data(scraper, user_filters: dict) -> dict:
     }
     if scraper.SOURCE == KamernetScraper.SOURCE:
         data["kamernet_property_type"] = user_filters.get("kamernet_property_type", "any")
+    if scraper.SOURCE == FundaScraper.SOURCE:
+        data["funda_keywords"] = list(getattr(scraper, "keywords", ()))
     build_url = getattr(scraper, "_build_url", None)
     if callable(build_url):
         try:

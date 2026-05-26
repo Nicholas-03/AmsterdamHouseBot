@@ -34,6 +34,11 @@ def _parse_non_negative_int(raw_value: str | None, default: int) -> int:
     return value
 
 
+def _parse_csv(raw_value: str | None, default: str = "") -> tuple[str, ...]:
+    value = default if raw_value is None else raw_value
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
 def _load_reply_message(prefix: str, fallback: str = "") -> str:
     message_file = os.getenv(f"{prefix}_REPLY_MESSAGE_FILE", "").strip()
     if message_file:
@@ -90,6 +95,7 @@ FUNDA_REPLY_MESSAGE = _load_reply_message("FUNDA", KAMERNET_REPLY_MESSAGE)
 FUNDA_REPLY_MAX_PER_SCAN = _parse_non_negative_int(os.getenv("FUNDA_REPLY_MAX_PER_SCAN"), 0)
 FUNDA_VIEWING_REQUEST = _parse_bool(os.getenv("FUNDA_VIEWING_REQUEST"), True)
 FUNDA_CONTACT_API_BASE = os.getenv("FUNDA_CONTACT_API_BASE", "https://contacts-bff.funda.io").rstrip("/")
+FUNDA_KEYWORDS = _parse_csv(os.getenv("FUNDA_KEYWORDS"), "student")
 FUNDA_BROWSER_TIMEOUT_SECONDS = _parse_non_negative_int(
     os.getenv("FUNDA_BROWSER_TIMEOUT_SECONDS"),
     45,

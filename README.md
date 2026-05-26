@@ -108,6 +108,7 @@ Funda auto-reply variables:
 - `FUNDA_REPLY_MESSAGE_FILE`: optional path to a UTF-8 text file containing the Funda reply message; defaults to the Kamernet message when unset
 - `FUNDA_REPLY_MAX_PER_SCAN`: optional, defaults to `0` for no cap; set a positive number to limit replies per scan
 - `FUNDA_CONTACT_API_BASE`: optional, defaults to `https://contacts-bff.funda.io`
+- `FUNDA_KEYWORDS`: optional comma-separated keyword filter for Funda listing details; defaults to `student`
 - `FUNDA_CONFIRMATION_ENABLED`: optional, defaults to `1` when a mail.tm inbox is configured; checks for the forwarded Funda confirmation email after a live send
 - `FUNDA_MAILTM_ADDRESS`: optional, defaults to `ROOFZ_MAILTM_ADDRESS`; mail.tm inbox where forwarded Funda emails arrive
 - `FUNDA_MAILTM_PASSWORD`: optional, defaults to `ROOFZ_MAILTM_PASSWORD`
