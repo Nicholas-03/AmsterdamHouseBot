@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import logging
 import re
 
@@ -42,6 +43,13 @@ _NEGATIVE_PATTERNS = (
 )
 
 
+@dataclass(frozen=True)
+class StudentCompatibilityDecision:
+    keep: bool
+    reason: str
+    pattern: str = ""
+
+
 async def filter_student_compatible_listings(
     listings: list[Listing],
     *,
@@ -53,9 +61,29 @@ async def filter_student_compatible_listings(
 
     semaphore = asyncio.Semaphore(_DETAIL_CONCURRENCY)
     results = await asyncio.gather(
-        *(_is_detail_student_compatible(listing, headers, source, semaphore) for listing in listings)
+        *(_detail_student_compatibility_decision(listing, headers, source, semaphore) for listing in listings)
     )
-    filtered = [listing for listing, keep in zip(listings, results) if keep]
+    filtered: list[Listing] = []
+    for listing, decision in zip(listings, results):
+        listing.reply_data["student_compatibility_reason"] = decision.reason
+        listing.reply_data["student_compatibility_pattern"] = decision.pattern
+        if decision.keep:
+            filtered.append(listing)
+            logger.debug(
+                "%s student compatibility accepted %s (%s): %s",
+                source,
+                listing.id,
+                listing.title,
+                decision.reason,
+            )
+        else:
+            logger.info(
+                "%s student compatibility rejected %s (%s): %s",
+                source,
+                listing.id,
+                listing.title,
+                decision.reason,
+            )
     logger.info(
         "%s: %d of %d listings matched student/guarantor compatibility filter",
         source,
@@ -66,12 +94,31 @@ async def filter_student_compatible_listings(
 
 
 def is_student_compatible_text(text: str) -> bool:
+    return student_compatibility_decision(text).keep
+
+
+def student_compatibility_decision(text: str) -> StudentCompatibilityDecision:
     normalized = _normalize_text(text)
     if not normalized:
-        return False
-    if _matches_any(_NEGATIVE_PATTERNS, normalized):
-        return False
-    return _matches_any(_POSITIVE_PATTERNS, normalized)
+        return StudentCompatibilityDecision(False, "No searchable listing text was available.")
+    negative_pattern = _first_matching_pattern(_NEGATIVE_PATTERNS, normalized)
+    if negative_pattern:
+        return StudentCompatibilityDecision(
+            False,
+            "Rejected because the text explicitly excludes students or guarantors.",
+            negative_pattern,
+        )
+    positive_pattern = _first_matching_pattern(_POSITIVE_PATTERNS, normalized)
+    if positive_pattern:
+        return StudentCompatibilityDecision(
+            True,
+            "Accepted because the text mentions students or guarantors positively.",
+            positive_pattern,
+        )
+    return StudentCompatibilityDecision(
+        False,
+        "Rejected because no positive student or guarantor signal was found.",
+    )
 
 
 def html_to_search_text(html: str) -> str:
@@ -82,21 +129,32 @@ def html_to_search_text(html: str) -> str:
     return content.get_text(" ", strip=True)
 
 
-async def _is_detail_student_compatible(
+async def _detail_student_compatibility_decision(
     listing: Listing,
     headers: dict[str, str],
     source: str,
     semaphore: asyncio.Semaphore,
-) -> bool:
+) -> StudentCompatibilityDecision:
     card_text = listing.reply_data.get("card_text", "")
     try:
         async with semaphore:
             html = await fetch_html(listing.url, headers, source=source, timeout=30)
     except Exception as exc:
         logger.warning("%s detail lookup failed for student compatibility filter: %s", source, exc)
-        return is_student_compatible_text(_listing_text(listing, card_text))
+        fallback_decision = student_compatibility_decision(_listing_text(listing, card_text))
+        if fallback_decision.keep:
+            return StudentCompatibilityDecision(
+                True,
+                "Detail page failed; accepted from search-card student or guarantor text.",
+                fallback_decision.pattern,
+            )
+        return StudentCompatibilityDecision(
+            False,
+            "Detail page failed and the search card had no positive student or guarantor signal.",
+            fallback_decision.pattern,
+        )
 
-    return is_student_compatible_text(
+    return student_compatibility_decision(
         "\n".join(
             (
                 _listing_text(listing, card_text),
@@ -121,8 +179,11 @@ def _listing_text(listing: Listing, card_text: str) -> str:
     )
 
 
-def _matches_any(patterns: tuple[str, ...], text: str) -> bool:
-    return any(re.search(pattern, text, re.I) for pattern in patterns)
+def _first_matching_pattern(patterns: tuple[str, ...], text: str) -> str:
+    for pattern in patterns:
+        if re.search(pattern, text, re.I):
+            return pattern
+    return ""
 
 
 def _normalize_text(text: str) -> str:

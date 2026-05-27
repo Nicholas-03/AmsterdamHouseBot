@@ -19,8 +19,9 @@ The bot stores user filters and already-seen listings in SQLite, so duplicate li
 - Lets each Telegram user choose which sites send listing notifications
 - Lets each Telegram user toggle Kamernet/Funda/Roofz auto-replies on or off
 - Sends new listings directly in Telegram
+- Runs an optional fast scan for first-come-first-served sources between full scans
 - Supports an on-demand scan with `/test`
-- Stores operational events in SQLite and keeps the last 3 days for debugging
+- Stores operational events in SQLite, keeps the last 3 days for debugging, and exposes health via `/status`
 
 ## Prerequisites
 
@@ -83,6 +84,17 @@ Environment variables:
 - `DB_PATH`: optional, SQLite database path, defaults to `listings.db`
 - `TELEGRAM_ALLOWED_CHAT_IDS`: optional, comma-separated Telegram chat IDs allowed to use the bot. Leave empty for local unrestricted use.
 - `SCRAPER_TIMEOUT_SECONDS`: optional, defaults to `240`; prevents one slow source from blocking later scheduled scans. Set `0` to disable the guard.
+- `LOCAL_TIMEZONE`: optional, defaults to `Europe/Amsterdam`; used for daily summaries.
+- `FAST_SCAN_ENABLED`: optional, defaults to `1`; runs an extra lightweight scan between full scans.
+- `FAST_SCAN_INTERVAL_SECONDS`: optional, defaults to `120`.
+- `FAST_SCAN_SOURCES`: optional, defaults to `kamernet,funda,roofz`.
+- `HEALTH_ALERT_ENABLED`: optional, defaults to `1`; sends a Telegram warning when no scan finishes for too long.
+- `HEALTH_ALERT_STALE_SCAN_MINUTES`: optional, defaults to `15`.
+- `HEALTH_ALERT_COOLDOWN_MINUTES`: optional, defaults to `30`; prevents repeated stale-scan warnings.
+- `DAILY_SUMMARY_ENABLED`: optional, defaults to `1`; sends a daily Telegram summary.
+- `DAILY_SUMMARY_HOUR` and `DAILY_SUMMARY_MINUTE`: optional, default to `09:00` in `LOCAL_TIMEZONE`.
+- `SOURCE_FAILURE_COOLDOWN_THRESHOLD`: optional, defaults to `2`; consecutive failures before a source is temporarily skipped.
+- `SOURCE_FAILURE_COOLDOWN_MINUTES`: optional, defaults to `15`.
 - `PARARIUS_STUDENT_COMPATIBILITY_FILTER_ENABLED`: optional, defaults to `1`; when enabled, Pararius detail pages must look student/guarantor-compatible and must not explicitly reject students or guarantors.
 - `HUURWONINGEN_STUDENT_COMPATIBILITY_FILTER_ENABLED`: optional, defaults to `1`; same compatibility filter for Huurwoningen detail pages.
 
@@ -176,6 +188,7 @@ After that, the scheduled scanner will keep running in the background while the 
 
 - `/start` - initialize the bot and show help
 - `/help` - show available commands
+- `/status` - show scan health, source status, queue depth, warnings, and recent counts
 - `/search` - save or update filters
 - `/filters` - show current filters
 - `/sources on|off|only|all|status` - control which sites send notifications
@@ -190,15 +203,17 @@ After that, the scheduled scanner will keep running in the background while the 
 ## How the bot works
 
 1. `main.py` starts the Telegram application.
-2. `bot.py` registers commands and schedules the recurring scan job.
+2. `bot.py` registers commands, schedules the full scan, optional fast scan, health watchdog, and daily summary.
 3. `scanner.py` runs the enabled scrapers for each active user. Pararius and Huurwoningen detail pages are filtered for student/guarantor compatibility by default.
-4. `db.py` stores filters, deduplicates listings, records operational events, and prunes event rows older than 3 days.
+4. `auto_reply_queue.py` runs Kamernet/Funda/Roofz replies in the background so slow replies do not block listing discovery.
+5. `source_health.py` tracks consecutive source failures and temporarily cools down noisy sources.
+6. `db.py` stores filters, deduplicates listings, records operational events, and prunes event rows older than 3 days.
 
 ## Auto-Reply
 
-Auto-reply needs both server setup and a Telegram toggle. Each source has its own server-side flag, and the user must send `/autoreply on`. When enabled, it only runs after a new listing has already matched your filters and the Telegram notification has been sent. It records attempts in SQLite so the same listing is not answered twice, even if multiple Telegram users match it.
+Auto-reply needs both server setup and a Telegram toggle. Each source has its own server-side flag, and the user must send `/autoreply on`. When enabled, it only runs after a new listing has already matched your filters and the Telegram notification has been sent. Replies are queued in-process and handled by a background worker so slow confirmations or browser/API fallbacks do not block the next scraper. It records attempts in SQLite so the same listing is not answered twice, even if multiple Telegram users match it.
 
-Operational event logging writes scan starts/finishes, scraper results, new listings, notification sends, auto-reply decisions, auto-reply results, and Telegram warnings into the `bot_events` table. Auto-reply rows also store `first_seen_at`, `sent_at`, `reply_latency_seconds`, `confirmation_at`, and `confirmation_latency_seconds` in `auto_replies`, measuring from the first time the bot saw the listing. Funda and Roofz populate confirmation timing when the forwarded email arrives; Kamernet normally has no confirmation email, so only reply latency is recorded. Use `/logs` in Telegram for a quick recent view, or inspect SQLite directly on the VPS. Event rows older than 3 days are pruned on startup and scheduled scans.
+Operational event logging writes scan starts/finishes, fast-scan activity, scraper results, source cooldowns, new listings, notification sends, auto-reply queue events, auto-reply decisions, auto-reply results, daily summaries, and Telegram warnings into the `bot_events` table. Auto-reply rows also store `first_seen_at`, `sent_at`, `reply_latency_seconds`, `confirmation_at`, and `confirmation_latency_seconds` in `auto_replies`, measuring from the first time the bot saw the listing. Funda and Roofz populate confirmation timing when the forwarded email arrives; Kamernet normally has no confirmation email, so only reply latency is recorded. Pararius/Huurwoningen student-compatibility decisions are logged in process logs, and accepted listings carry the reason in the structured `listing_new` event. Use `/status` for the current operational view, `/logs` for recent raw events, or inspect SQLite directly on the VPS. Event rows older than 3 days are pruned on startup and scheduled scans.
 
 Keep tokens, passwords, personal form data, and reply messages in `.env`. Do not commit real `.env` files, saved browser sessions, local databases, or reply-message text files. For VPS deployment, prefer inline `KAMERNET_REPLY_MESSAGE`, `FUNDA_REPLY_MESSAGE`, and `ROOFZ_REPLY_MESSAGE` values in `.env`; local `*_REPLY_MESSAGE_FILE` paths are not uploaded by the deploy script.
 
@@ -290,11 +305,13 @@ python scripts/check_mailtm_preapplications.py --title "Jan van Galenstraat 502"
 ```text
 .
 |-- bot.py
+|-- auto_reply_queue.py
 |-- config.py
 |-- db.py
 |-- main.py
 |-- pyproject.toml
 |-- scanner.py
+|-- source_health.py
 |-- scrapers/
 |   |-- base.py
 |   |-- funda.py
@@ -315,6 +332,7 @@ Your `.env` file is missing or the token is empty.
 
 - Make sure you ran `/start` and `/search`
 - Run `/test` to check whether listings are available right now
+- Send `/status` to see whether scans are finishing, which sources are cooling down, and whether auto-replies are queued
 - Verify that your Kamernet property types, rent, bedroom/room, and size filters are not too restrictive
 
 ### I want to start fresh

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from telegram import Bot
 from telegram.constants import ParseMode
 
+from auto_reply_queue import AUTO_REPLY_QUEUE, AutoReplyJob
 import config
 import db
 from funda_replier import FundaReplier, FundaReplyResult, FundaReplySettings
@@ -22,6 +23,7 @@ from scrapers.huurwoningen import HuurwoningenScraper
 from scrapers.kamernet import KamernetScraper
 from scrapers.pararius import ParariusScraper
 from scrapers.roofz import RoofzScraper
+from source_health import SOURCE_HEALTH
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +166,19 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
     }
     for scraper in scrapers:
         try:
+            in_cooldown, cooldown_seconds = SOURCE_HEALTH.cooldown_status(scraper.SOURCE)
+            if in_cooldown:
+                await db.log_event(
+                    "scraper_skipped",
+                    level="warning",
+                    chat_id=chat_id,
+                    source=scraper.SOURCE,
+                    status="cooldown",
+                    detail=f"Skipped because the source is cooling down for {cooldown_seconds} more seconds.",
+                    data={"cooldown_remaining_seconds": cooldown_seconds},
+                )
+                continue
+
             if not await _scan_is_current(chat_id, user_filters, require_active):
                 logger.info("Scan stopped for user %s because filters changed or setup is open.", chat_id)
                 await db.log_event(
@@ -216,13 +231,14 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                         "url": listing.url,
                         "first_seen_at": first_seen_at,
                         "first_seen_by_bot": bool(seen_listing.get("inserted")) if seen_listing else False,
+                        "student_compatibility_reason": listing.reply_data.get("student_compatibility_reason"),
                     },
                 )
                 await _send_notification(bot, chat_id, listing)
                 await db.mark_sent(chat_id, listing.source, listing.id)
                 if user_filters.get("auto_reply_enabled"):
                     if listing.source == KamernetScraper.SOURCE:
-                        attempted = await _maybe_auto_reply_to_listing(
+                        attempted = await _enqueue_auto_reply_to_listing(
                             chat_id,
                             listing,
                             kamernet_reply_settings,
@@ -237,7 +253,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                         if attempted:
                             reply_attempts[KamernetScraper.SOURCE] += 1
                     elif listing.source == FundaScraper.SOURCE:
-                        attempted = await _maybe_auto_reply_to_listing(
+                        attempted = await _enqueue_auto_reply_to_listing(
                             chat_id,
                             listing,
                             funda_reply_settings,
@@ -252,7 +268,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                         if attempted:
                             reply_attempts[FundaScraper.SOURCE] += 1
                     elif listing.source == RoofzScraper.SOURCE:
-                        attempted = await _maybe_auto_reply_to_listing(
+                        attempted = await _enqueue_auto_reply_to_listing(
                             chat_id,
                             listing,
                             roofz_reply_settings,
@@ -286,6 +302,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
             )
             scrape_error = getattr(scraper, "last_error", "")
             if scrape_error:
+                await SOURCE_HEALTH.record_failure(scraper.SOURCE, status="error", detail=scrape_error)
                 await db.log_event(
                     "scraper_failed",
                     level="error",
@@ -296,6 +313,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                     data={"listing_count": len(listings), "new_count": new_from_scraper},
                 )
             else:
+                await SOURCE_HEALTH.record_success(scraper.SOURCE)
                 await db.log_event(
                     "scraper_finished",
                     chat_id=chat_id,
@@ -310,6 +328,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
         except TimeoutError:
             detail = f"{scraper.SOURCE} scraper timed out after {config.SCRAPER_TIMEOUT_SECONDS} seconds."
             logger.error("Scraper %s timed out for user %s", scraper.SOURCE, chat_id)
+            await SOURCE_HEALTH.record_failure(scraper.SOURCE, status="timeout", detail=detail)
             await db.log_event(
                 "scraper_failed",
                 level="error",
@@ -320,6 +339,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
             )
         except Exception as exc:
             logger.error("Scraper %s failed for user %s: %s", scraper.SOURCE, chat_id, exc)
+            await SOURCE_HEALTH.record_failure(scraper.SOURCE, status="error", detail=str(exc))
             await db.log_event(
                 "scraper_failed",
                 level="error",
@@ -371,6 +391,99 @@ def _scraper_event_data(scraper, user_filters: dict) -> dict:
         except Exception as exc:
             data["search_url_error"] = str(exc)
     return data
+
+
+async def _enqueue_auto_reply_to_listing(
+    chat_id: int,
+    listing,
+    settings,
+    settings_error: str | None,
+    attempts_so_far: int,
+    replier_cls,
+    result_cls,
+    source_label: str,
+    bot: Bot | None = None,
+    first_seen_at: str | None = None,
+) -> bool:
+    if not settings.enabled:
+        await db.log_event(
+            "auto_reply_source_disabled",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status="skipped",
+        )
+        return False
+    if settings_error:
+        await db.log_event(
+            "auto_reply_settings_unavailable",
+            level="warning",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status="skipped",
+            detail=settings_error,
+        )
+        return False
+    if settings.max_per_scan and attempts_so_far >= settings.max_per_scan:
+        logger.info(
+            "%s auto-reply cap reached for this scan: %d/%d",
+            source_label,
+            attempts_so_far,
+            settings.max_per_scan,
+        )
+        await db.log_event(
+            "auto_reply_cap_reached",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status="skipped",
+            data={"attempts_so_far": attempts_so_far, "max_per_scan": settings.max_per_scan},
+        )
+        return False
+
+    existing_reply = await db.get_auto_reply(listing.source, listing.id)
+    if should_skip_existing_reply(existing_reply, settings.dry_run):
+        logger.info(
+            "%s auto-reply skipped for %s; existing status is %s.",
+            source_label,
+            listing.id,
+            existing_reply["status"],
+        )
+        await db.log_event(
+            "auto_reply_skipped_existing",
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            status=existing_reply["status"],
+            data={"dry_run": existing_reply["dry_run"]},
+        )
+        return False
+
+    return await AUTO_REPLY_QUEUE.enqueue(
+        AutoReplyJob(
+            chat_id=chat_id,
+            source=listing.source,
+            listing_id=listing.id,
+            title=listing.title,
+            runner=lambda: _maybe_auto_reply_to_listing(
+                chat_id,
+                listing,
+                settings,
+                settings_error,
+                attempts_so_far,
+                replier_cls,
+                result_cls,
+                source_label,
+                bot,
+                first_seen_at,
+            ),
+        )
+    )
 
 
 async def _maybe_auto_reply_to_listing(

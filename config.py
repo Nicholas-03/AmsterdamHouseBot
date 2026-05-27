@@ -66,6 +66,34 @@ POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
 DB_PATH = os.getenv("DB_PATH", "listings.db")
 TELEGRAM_ALLOWED_CHAT_IDS = _parse_chat_ids(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", ""))
 SCRAPER_TIMEOUT_SECONDS = _parse_non_negative_int(os.getenv("SCRAPER_TIMEOUT_SECONDS"), 240)
+LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "Europe/Amsterdam").strip() or "Europe/Amsterdam"
+
+FAST_SCAN_ENABLED = _parse_bool(os.getenv("FAST_SCAN_ENABLED"), True)
+FAST_SCAN_INTERVAL_SECONDS = _parse_non_negative_int(os.getenv("FAST_SCAN_INTERVAL_SECONDS"), 120)
+FAST_SCAN_SOURCES = _parse_csv(os.getenv("FAST_SCAN_SOURCES"), "kamernet,funda,roofz")
+
+HEALTH_ALERT_ENABLED = _parse_bool(os.getenv("HEALTH_ALERT_ENABLED"), True)
+HEALTH_ALERT_STALE_SCAN_MINUTES = _parse_non_negative_int(
+    os.getenv("HEALTH_ALERT_STALE_SCAN_MINUTES"),
+    15,
+)
+HEALTH_ALERT_COOLDOWN_MINUTES = _parse_non_negative_int(
+    os.getenv("HEALTH_ALERT_COOLDOWN_MINUTES"),
+    30,
+)
+
+DAILY_SUMMARY_ENABLED = _parse_bool(os.getenv("DAILY_SUMMARY_ENABLED"), True)
+DAILY_SUMMARY_HOUR = _parse_non_negative_int(os.getenv("DAILY_SUMMARY_HOUR"), 9)
+DAILY_SUMMARY_MINUTE = _parse_non_negative_int(os.getenv("DAILY_SUMMARY_MINUTE"), 0)
+
+SOURCE_FAILURE_COOLDOWN_THRESHOLD = _parse_non_negative_int(
+    os.getenv("SOURCE_FAILURE_COOLDOWN_THRESHOLD"),
+    2,
+)
+SOURCE_FAILURE_COOLDOWN_MINUTES = _parse_non_negative_int(
+    os.getenv("SOURCE_FAILURE_COOLDOWN_MINUTES"),
+    15,
+)
 
 PARARIUS_STUDENT_COMPATIBILITY_FILTER_ENABLED = _parse_bool(
     os.getenv("PARARIUS_STUDENT_COMPATIBILITY_FILTER_ENABLED"),

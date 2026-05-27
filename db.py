@@ -356,6 +356,128 @@ async def get_recent_bot_events(limit: int = 50) -> list[dict]:
             return [dict(row) for row in rows]
 
 
+async def get_latest_bot_event(
+    event_types: str | tuple[str, ...],
+    *,
+    chat_id: int | None = None,
+    source: str | None = None,
+    status: str | None = None,
+) -> dict | None:
+    if isinstance(event_types, str):
+        event_types = (event_types,)
+    if not event_types:
+        return None
+
+    clauses = [f"event_type IN ({','.join('?' for _ in event_types)})"]
+    params: list = list(event_types)
+    if chat_id is not None:
+        clauses.append("chat_id=?")
+        params.append(chat_id)
+    if source is not None:
+        clauses.append("source=?")
+        params.append(source)
+    if status is not None:
+        clauses.append("status=?")
+        params.append(status)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"""
+            SELECT *
+            FROM bot_events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            params,
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_latest_source_events(event_types: tuple[str, ...] | None = None) -> dict[str, dict]:
+    event_types = event_types or ("scraper_finished", "scraper_failed", "scraper_skipped")
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"""
+            SELECT e.*
+            FROM bot_events e
+            INNER JOIN (
+                SELECT source, MAX(id) AS max_id
+                FROM bot_events
+                WHERE source IS NOT NULL
+                  AND event_type IN ({','.join('?' for _ in event_types)})
+                GROUP BY source
+            ) latest ON latest.max_id = e.id
+            ORDER BY e.source
+            """,
+            list(event_types),
+        ) as cur:
+            rows = await cur.fetchall()
+            return {row["source"]: dict(row) for row in rows}
+
+
+async def get_event_counts_since(event_type: str, *, hours: int = 24) -> list[dict]:
+    hours = max(1, min(hours, 24 * 14))
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT COALESCE(source, '') AS source, COALESCE(status, '') AS status, COUNT(*) AS count
+            FROM bot_events
+            WHERE event_type=?
+              AND created_at >= datetime('now', ?)
+            GROUP BY source, status
+            ORDER BY source, status
+            """,
+            (event_type, f"-{hours} hours"),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def get_level_counts_since(*, hours: int = 24) -> dict[str, int]:
+    hours = max(1, min(hours, 24 * 14))
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT level, COUNT(*) AS count
+            FROM bot_events
+            WHERE created_at >= datetime('now', ?)
+            GROUP BY level
+            """,
+            (f"-{hours} hours",),
+        ) as cur:
+            rows = await cur.fetchall()
+            return {row["level"]: row["count"] for row in rows}
+
+
+async def get_auto_reply_summary_since(*, hours: int = 24) -> list[dict]:
+    hours = max(1, min(hours, 24 * 14))
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT
+                source,
+                status,
+                COUNT(*) AS count,
+                AVG(reply_latency_seconds) AS avg_reply_latency_seconds,
+                AVG(confirmation_latency_seconds) AS avg_confirmation_latency_seconds
+            FROM auto_replies
+            WHERE updated_at >= datetime('now', ?)
+            GROUP BY source, status
+            ORDER BY source, status
+            """,
+            (f"-{hours} hours",),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
+
+
 async def _insert_bot_event(
     db: aiosqlite.Connection,
     event_type: str,
