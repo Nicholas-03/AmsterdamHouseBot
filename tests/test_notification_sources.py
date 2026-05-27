@@ -1,3 +1,4 @@
+import asyncio
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -46,6 +47,24 @@ def _fake_scraper(source: str, calls: list[str]):
     return FakeScraper
 
 
+def _slow_fake_scraper(source: str):
+    class SlowFakeScraper:
+        SOURCE = source
+        last_error = ""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def scrape(self):
+            await asyncio.sleep(1)
+            return []
+
+        def _build_url(self):
+            return f"https://{source}.test"
+
+    return SlowFakeScraper
+
+
 class ScannerSourceSelectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_scan_only_instantiates_enabled_sources(self):
         calls: list[str] = []
@@ -75,6 +94,39 @@ class ScannerSourceSelectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(count, 0)
         self.assertEqual(calls, ["funda", "roofz"])
+
+    async def test_run_scan_logs_and_continues_when_scraper_times_out(self):
+        user_filters = {
+            "chat_id": 123,
+            "city": "Amsterdam",
+            "max_price": 1500,
+            "min_bedrooms": 1,
+            "min_size_m2": 25,
+            "kamernet_property_type": "studio",
+            "auto_reply_enabled": False,
+            "enabled_sources": ("roofz",),
+            "active": True,
+            "setup_in_progress": False,
+        }
+        log_event = AsyncMock()
+
+        with (
+            patch.object(scanner, "RoofzScraper", _slow_fake_scraper("roofz")),
+            patch.object(scanner.config, "SCRAPER_TIMEOUT_SECONDS", 0.01),
+            patch.object(scanner.db, "get_filters", AsyncMock(return_value=user_filters)),
+            patch.object(scanner.db, "log_event", log_event),
+        ):
+            count = await scanner.run_scan_for_user(AsyncMock(), user_filters)
+
+        self.assertEqual(count, 0)
+        timeout_events = [
+            call
+            for call in log_event.await_args_list
+            if call.args and call.args[0] == "scraper_failed"
+        ]
+        self.assertEqual(len(timeout_events), 1)
+        self.assertEqual(timeout_events[0].kwargs["source"], "roofz")
+        self.assertEqual(timeout_events[0].kwargs["status"], "timeout")
 
 
 if __name__ == "__main__":

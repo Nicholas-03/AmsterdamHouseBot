@@ -1,3 +1,4 @@
+import asyncio
 from html import escape
 import logging
 from datetime import datetime, timezone
@@ -182,7 +183,7 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                 status="started",
                 data=scraper_data,
             )
-            listings = await scraper.scrape()
+            listings = await _scrape_with_timeout(scraper)
             new_from_scraper = 0
             for listing in listings:
                 if not await _scan_is_current(chat_id, user_filters, require_active):
@@ -306,6 +307,17 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
                         **scraper_data,
                     },
                 )
+        except TimeoutError:
+            detail = f"{scraper.SOURCE} scraper timed out after {config.SCRAPER_TIMEOUT_SECONDS} seconds."
+            logger.error("Scraper %s timed out for user %s", scraper.SOURCE, chat_id)
+            await db.log_event(
+                "scraper_failed",
+                level="error",
+                chat_id=chat_id,
+                source=scraper.SOURCE,
+                status="timeout",
+                detail=detail,
+            )
         except Exception as exc:
             logger.error("Scraper %s failed for user %s: %s", scraper.SOURCE, chat_id, exc)
             await db.log_event(
@@ -328,6 +340,13 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
         },
     )
     return new_count
+
+
+async def _scrape_with_timeout(scraper) -> list:
+    timeout_seconds = config.SCRAPER_TIMEOUT_SECONDS
+    if not timeout_seconds:
+        return await scraper.scrape()
+    return await asyncio.wait_for(scraper.scrape(), timeout=timeout_seconds)
 
 
 def _scraper_event_data(scraper, user_filters: dict) -> dict:

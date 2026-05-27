@@ -31,25 +31,40 @@ class RoofzScraper(BaseScraper):
 
         await asyncio.sleep(random.uniform(1.0, 3.0))
         listings: list[Listing] = []
+        browser = None
+        playwright = None
         try:
-            async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch(headless=True)
-                page = await browser.new_page(viewport={"width": 1440, "height": 1200})
+            playwright = await async_playwright().start()
+            browser = await playwright.chromium.launch(headless=True, timeout=30000)
+            page = await browser.new_page(viewport={"width": 1440, "height": 1200})
 
-                for url in self._urls():
-                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                    await self._settle_page(page)
-                    await self._try_select_city(page)
-                    listings = await self._extract_listings(page)
-                    listings = [listing for listing in listings if self._matches_filters(listing)]
-                    if listings:
-                        break
+            for url in self._urls():
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await self._settle_page(page)
+                await self._try_select_city(page)
+                listings = await self._extract_listings(page)
+                listings = [listing for listing in listings if self._matches_filters(listing)]
+                if listings:
+                    break
 
-                await browser.close()
+        except asyncio.CancelledError:
+            logger.warning("Roofz scrape was cancelled before completion.")
+            raise
         except Exception as exc:
             self.last_error = str(exc)
             logger.error("Roofz scrape error: %s", exc)
             return []
+        finally:
+            if browser:
+                try:
+                    await asyncio.wait_for(browser.close(), timeout=10)
+                except Exception as exc:
+                    logger.warning("Roofz browser cleanup failed: %s", exc)
+            if playwright:
+                try:
+                    await asyncio.wait_for(playwright.stop(), timeout=10)
+                except Exception as exc:
+                    logger.warning("Roofz Playwright cleanup failed: %s", exc)
 
         logger.info("Roofz: found %d matching listings", len(listings))
         return listings

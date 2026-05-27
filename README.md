@@ -82,6 +82,7 @@ Environment variables:
 - `POLL_INTERVAL_SECONDS`: optional, scan interval in seconds, defaults to `300`
 - `DB_PATH`: optional, SQLite database path, defaults to `listings.db`
 - `TELEGRAM_ALLOWED_CHAT_IDS`: optional, comma-separated Telegram chat IDs allowed to use the bot. Leave empty for local unrestricted use.
+- `SCRAPER_TIMEOUT_SECONDS`: optional, defaults to `240`; prevents one slow source from blocking later scheduled scans. Set `0` to disable the guard.
 - `PARARIUS_STUDENT_COMPATIBILITY_FILTER_ENABLED`: optional, defaults to `1`; when enabled, Pararius detail pages must look student/guarantor-compatible and must not explicitly reject students or guarantors.
 - `HUURWONINGEN_STUDENT_COMPATIBILITY_FILTER_ENABLED`: optional, defaults to `1`; same compatibility filter for Huurwoningen detail pages.
 
