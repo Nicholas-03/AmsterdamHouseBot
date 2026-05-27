@@ -177,14 +177,13 @@ async def _run_scan_job(
         filtered_users: list[dict] = []
         for user in users:
             if source_filter:
-                enabled_sources = tuple(
+                effective_sources = tuple(
                     source
                     for source in normalize_sources(user.get("enabled_sources"))
                     if source in source_filter
                 )
-                if not enabled_sources:
+                if not effective_sources:
                     continue
-                user = {**user, "enabled_sources": enabled_sources}
             filtered_users.append(user)
 
         logger.info("%s: %d active users.", started_event, len(filtered_users))
@@ -198,7 +197,7 @@ async def _run_scan_job(
         )
         for user in filtered_users:
             try:
-                await run_scan_for_user(context.bot, user)
+                await run_scan_for_user(context.bot, user, source_filter=source_filter)
             except Exception as exc:
                 logger.error("Scan error for user %s: %s", user["chat_id"], exc)
                 await db.log_event(

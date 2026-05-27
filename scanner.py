@@ -47,9 +47,19 @@ _FILTER_MATCH_KEYS = (
 )
 
 
-async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool = True) -> int:
+async def run_scan_for_user(
+    bot: Bot,
+    user_filters: dict,
+    require_active: bool = True,
+    source_filter: set[str] | None = None,
+) -> int:
     chat_id = user_filters["chat_id"]
-    enabled_sources = normalize_sources(user_filters.get("enabled_sources"))
+    configured_sources = normalize_sources(user_filters.get("enabled_sources"))
+    enabled_sources = tuple(
+        source
+        for source in configured_sources
+        if source_filter is None or source in source_filter
+    )
     enabled_source_set = set(enabled_sources)
     await db.log_event(
         "scan_user_started",
@@ -64,8 +74,18 @@ async def run_scan_for_user(bot: Bot, user_filters: dict, require_active: bool =
             "kamernet_property_type": user_filters.get("kamernet_property_type"),
             "auto_reply_enabled": user_filters.get("auto_reply_enabled"),
             "enabled_sources": list(enabled_sources),
+            "configured_sources": list(configured_sources),
+            "source_filter": sorted(source_filter) if source_filter else None,
         },
     )
+    if not enabled_sources:
+        await db.log_event(
+            "scan_user_skipped",
+            chat_id=chat_id,
+            status="no_enabled_sources",
+            data={"source_filter": sorted(source_filter) if source_filter else None},
+        )
+        return 0
     kamernet_reply_settings = KamernetReplySettings.from_config()
     kamernet_reply_settings_error = kamernet_reply_settings.ready_error()
     funda_reply_settings = FundaReplySettings.from_config()

@@ -95,6 +95,39 @@ class ScannerSourceSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(count, 0)
         self.assertEqual(calls, ["funda", "roofz"])
 
+    async def test_run_scan_source_filter_keeps_saved_filters_current(self):
+        calls: list[str] = []
+        user_filters = {
+            "chat_id": 123,
+            "city": "Amsterdam",
+            "max_price": 1500,
+            "min_bedrooms": 1,
+            "min_size_m2": 25,
+            "kamernet_property_type": "studio",
+            "auto_reply_enabled": False,
+            "enabled_sources": ALL_SOURCES,
+            "active": True,
+            "setup_in_progress": False,
+        }
+
+        with (
+            patch.object(scanner, "ParariusScraper", _fake_scraper("pararius", calls)),
+            patch.object(scanner, "FundaScraper", _fake_scraper("funda", calls)),
+            patch.object(scanner, "KamernetScraper", _fake_scraper("kamernet", calls)),
+            patch.object(scanner, "HuurwoningenScraper", _fake_scraper("huurwoningen", calls)),
+            patch.object(scanner, "RoofzScraper", _fake_scraper("roofz", calls)),
+            patch.object(scanner.db, "get_filters", AsyncMock(return_value=user_filters)),
+            patch.object(scanner.db, "log_event", AsyncMock()),
+        ):
+            count = await scanner.run_scan_for_user(
+                AsyncMock(),
+                user_filters,
+                source_filter={"funda", "roofz"},
+            )
+
+        self.assertEqual(count, 0)
+        self.assertEqual(calls, ["funda", "roofz"])
+
     async def test_run_scan_logs_and_continues_when_scraper_times_out(self):
         user_filters = {
             "chat_id": 123,
