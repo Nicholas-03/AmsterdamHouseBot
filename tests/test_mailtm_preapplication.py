@@ -3,7 +3,9 @@ import unittest
 
 from mailtm_preapplication import (
     MailTmSettings,
+    extract_complete_application_links,
     extract_preapplication_links,
+    find_complete_application_messages,
     find_confirmation_messages,
     find_mailtm_messages,
     find_preapplication_messages,
@@ -66,6 +68,46 @@ class MailTmPreApplicationTests(unittest.TestCase):
                 "https://roofz.onosre.com/invitation/abc/token/def",
             ],
         )
+
+    def test_extract_complete_application_link_from_html(self):
+        message = {
+            "html": [
+                '<html><body><a href="https://tracking.osre.nl/ls/click?id=complete">'
+                "Complete application</a></body></html>"
+            ],
+        }
+
+        self.assertEqual(
+            extract_complete_application_links(message),
+            ["https://tracking.osre.nl/ls/click?id=complete"],
+        )
+
+    def test_find_complete_application_messages_matches_forwarded_roofz_email(self):
+        client = FakeMailTmClient(
+            [
+                {
+                    "id": "1",
+                    "subject": "Fwd: Complete application for Spaklerweg 14-E-4, Amsterdam",
+                    "from": {"address": "tenant@gmail.example"},
+                    "seen": False,
+                    "createdAt": "2026-05-28T10:38:00+00:00",
+                },
+            ],
+            {
+                "1": {
+                    "html": [
+                        '<a href="https://roofz.onosre.com/application/abc">'
+                        "Complete application</a>"
+                    ]
+                },
+            },
+        )
+
+        messages = find_complete_application_messages(client, _settings())
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].message_id, "1")
+        self.assertEqual(messages[0].links, ["https://roofz.onosre.com/application/abc"])
 
     def test_find_preapplication_filters_sender_subject_seen_and_title(self):
         client = FakeMailTmClient(

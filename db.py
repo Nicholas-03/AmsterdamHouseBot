@@ -396,6 +396,38 @@ async def get_latest_bot_event(
             return dict(row) if row else None
 
 
+async def bot_event_exists(
+    event_type: str,
+    *,
+    source: str | None = None,
+    listing_id: str | None = None,
+    status: str | None = None,
+) -> bool:
+    clauses = ["event_type=?"]
+    params: list = [event_type]
+    if source is not None:
+        clauses.append("source=?")
+        params.append(source)
+    if listing_id is not None:
+        clauses.append("listing_id=?")
+        params.append(listing_id)
+    if status is not None:
+        clauses.append("status=?")
+        params.append(status)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            f"""
+            SELECT 1
+            FROM bot_events
+            WHERE {' AND '.join(clauses)}
+            LIMIT 1
+            """,
+            params,
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
 async def get_latest_source_events(event_types: tuple[str, ...] | None = None) -> dict[str, dict]:
     event_types = event_types or ("scraper_finished", "scraper_failed", "scraper_skipped")
     async with aiosqlite.connect(DB_PATH) as db:

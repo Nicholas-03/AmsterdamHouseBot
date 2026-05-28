@@ -235,6 +235,22 @@ ROOFZ_MAILTM_CONFIRMATION_SUBJECT_PATTERNS = tuple(
     ).split(",")
     if item.strip()
 )
+ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED = _parse_bool(
+    os.getenv("ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED"),
+    ROOFZ_PREAPPLICATION_ENABLED,
+)
+ROOFZ_COMPLETE_APPLICATION_MONITOR_INTERVAL_SECONDS = _parse_non_negative_int(
+    os.getenv("ROOFZ_COMPLETE_APPLICATION_MONITOR_INTERVAL_SECONDS"),
+    300,
+)
+ROOFZ_COMPLETE_APPLICATION_SUBJECT_PATTERNS = tuple(
+    item.strip()
+    for item in os.getenv(
+        "ROOFZ_COMPLETE_APPLICATION_SUBJECT_PATTERNS",
+        "Complete application",
+    ).split(",")
+    if item.strip()
+)
 ROOFZ_OSRE_PREAPPLICATION_API_URL = os.getenv(
     "ROOFZ_OSRE_PREAPPLICATION_API_URL",
     "https://relet.portal.prd.osre.eu/portal/applications/pre-application",

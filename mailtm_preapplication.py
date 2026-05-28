@@ -158,6 +158,48 @@ def find_confirmation_messages(
     ]
 
 
+def find_complete_application_messages(
+    client: MailTmClient,
+    settings: MailTmSettings,
+    subject_patterns: tuple[str, ...] = ("Complete application",),
+    since: datetime | None = None,
+    unread_only: bool = False,
+) -> list[MailTmMessage]:
+    senders = mailtm_senders(
+        getattr(settings, "confirmation_sender", ""),
+        getattr(settings, "preapplication_sender", ""),
+        getattr(settings, "forwarder_address", ""),
+    )
+    found: list[MailTmMessage] = []
+    for summary in client.list_messages():
+        subject = summary.get("subject") or ""
+        sender_address = (summary.get("from") or {}).get("address") or ""
+        seen = bool(summary.get("seen"))
+        created_at = _parse_datetime(summary.get("createdAt"))
+        if unread_only and seen:
+            continue
+        if since and created_at and created_at < since:
+            continue
+        if senders and not any(sender.casefold() in sender_address.casefold() for sender in senders):
+            continue
+        if subject_patterns and not any(pattern.casefold() in subject.casefold() for pattern in subject_patterns):
+            continue
+
+        full = client.get_message(summary["id"])
+        links = extract_complete_application_links(full)
+        found.append(
+            MailTmMessage(
+                message_id=summary["id"],
+                subject=subject,
+                sender=sender_address,
+                created_at=created_at,
+                seen=seen,
+                links=links,
+            )
+        )
+    return found
+
+
 def find_mailtm_messages(
     client: MailTmClient,
     senders: tuple[str, ...],
@@ -199,6 +241,23 @@ def extract_preapplication_links(message: dict) -> list[str]:
                 links.append(href)
         for href in re.findall(r"https?://[^\s<>\"]+", body):
             if _looks_like_preapplication_link("", href):
+                links.append(href.rstrip(").,"))
+    return list(dict.fromkeys(links))
+
+
+def extract_complete_application_links(message: dict) -> list[str]:
+    links: list[str] = []
+    for body in _message_bodies(message):
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
+            soup = BeautifulSoup(body, "html.parser")
+        for anchor in soup.find_all("a", href=True):
+            text = " ".join(anchor.get_text(" ", strip=True).split())
+            href = anchor["href"].strip()
+            if _looks_like_complete_application_link(text, href):
+                links.append(href)
+        for href in re.findall(r"https?://[^\s<>\"]+", body):
+            if _looks_like_complete_application_link("", href):
                 links.append(href.rstrip(").,"))
     return list(dict.fromkeys(links))
 
@@ -269,6 +328,14 @@ def _looks_like_preapplication_link(text: str, href: str) -> bool:
         return True
     parsed = urlparse(href)
     return "onosre.com" in parsed.netloc.casefold() and "invitation" in parsed.path.casefold()
+
+
+def _looks_like_complete_application_link(text: str, href: str) -> bool:
+    combined = f"{text} {href}".casefold()
+    if "complete application" in combined or "finish your application" in combined:
+        return True
+    parsed = urlparse(href)
+    return "onosre.com" in parsed.netloc.casefold() and "application" in parsed.path.casefold()
 
 
 def _parse_datetime(value: str | None) -> datetime | None:

@@ -20,6 +20,7 @@ import db
 from funda_replier import FundaReplySettings
 from kamernet_replier import KamernetReplySettings
 from notification_sources import ALL_SOURCES, format_sources, normalize_sources, parse_source_tokens
+from roofz_mailbox_monitor import find_new_complete_application_emails
 from roofz_replier import RoofzReplySettings
 from scanner import run_scan_for_user
 from scrapers.kamernet import (
@@ -122,6 +123,16 @@ def create_application() -> Application:
         app.job_queue.run_daily(
             daily_summary,
             time=_daily_summary_time(),
+            job_kwargs={"coalesce": True, "max_instances": 1},
+        )
+    if (
+        config.ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED
+        and config.ROOFZ_COMPLETE_APPLICATION_MONITOR_INTERVAL_SECONDS
+    ):
+        app.job_queue.run_repeating(
+            roofz_complete_application_watchdog,
+            interval=config.ROOFZ_COMPLETE_APPLICATION_MONITOR_INTERVAL_SECONDS,
+            first=90,
             job_kwargs={"coalesce": True, "max_instances": 1},
         )
 
@@ -265,6 +276,80 @@ async def daily_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         status="sent",
         data={"notified_users": len(users)},
     )
+
+
+async def roofz_complete_application_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not config.ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED:
+        return
+    try:
+        messages = await find_new_complete_application_emails()
+    except Exception as exc:
+        logger.warning("Roofz complete-application mailbox check failed: %s", exc)
+        await db.log_event(
+            "roofz_complete_application_check_failed",
+            level="warning",
+            source="roofz",
+            status="error",
+            detail=str(exc),
+        )
+        return
+
+    if not messages:
+        return
+
+    users = [
+        user
+        for user in await _get_active_allowed_users()
+        if "roofz" in normalize_sources(user.get("enabled_sources"))
+    ]
+    for message in messages:
+        if await db.bot_event_exists(
+            "roofz_complete_application_detected",
+            source="roofz",
+            listing_id=message.message_id,
+        ):
+            continue
+
+        await db.log_event(
+            "roofz_complete_application_detected",
+            level="warning",
+            source="roofz",
+            listing_id=message.message_id,
+            title=message.listing_title,
+            status="detected",
+            detail=message.subject,
+            data={
+                "sender": message.sender,
+                "link_count": len(message.links),
+                "links": list(message.links[:3]),
+            },
+        )
+        if not users:
+            continue
+
+        link_text = message.links[0] if message.links else "No application link detected in the email."
+        text = (
+            "Roofz complete application email arrived.\n\n"
+            f"Listing: {message.listing_title}\n"
+            "This step usually requires document uploads, so I am not submitting it automatically.\n\n"
+            f"Link: {link_text}"
+        )
+        notified_users = 0
+        for user in users:
+            await context.bot.send_message(
+                chat_id=user["chat_id"],
+                text=text,
+                disable_web_page_preview=True,
+            )
+            notified_users += 1
+        await db.log_event(
+            "roofz_complete_application_notification_sent",
+            source="roofz",
+            listing_id=message.message_id,
+            title=message.listing_title,
+            status="sent",
+            data={"notified_users": notified_users},
+        )
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

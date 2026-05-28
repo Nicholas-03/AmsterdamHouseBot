@@ -154,6 +154,9 @@ Roofz auto-reply variables:
 - `ROOFZ_MAILTM_FORWARDER_ADDRESS`: optional, defaults to `ROOFZ_EMAIL`; for Cloudflare this should normally match the mailbox address used in `ROOFZ_EMAIL`
 - `ROOFZ_PREAPPLICATION_ENABLED`: optional, set to `1` to poll the configured mailbox for Roofz pre-application links, complete the OSRE form, and check for a confirmation email after the first contact request
 - `ROOFZ_PREAPPLICATION_API_ENABLED`: optional, defaults to `1`; resolves OSRE email links and submits the pre-application through the OSRE API before falling back to browser automation
+- `ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED`: optional, defaults to `ROOFZ_PREAPPLICATION_ENABLED`; watches the configured mailbox for later Roofz "Complete application" emails and forwards the link to Telegram
+- `ROOFZ_COMPLETE_APPLICATION_MONITOR_INTERVAL_SECONDS`: optional, defaults to `300`
+- `ROOFZ_COMPLETE_APPLICATION_SUBJECT_PATTERNS`: optional comma-separated subject patterns, defaults to `Complete application`
 - `ROOFZ_OSRE_PREAPPLICATION_API_URL`: optional, defaults to `https://relet.portal.prd.osre.eu/portal/applications/pre-application`
 - `ROOFZ_OSRE_AVAILABILITY_API_BASE`: optional, defaults to `https://financial-check.portal.prd.osre.eu/portal/financial-check/check-availability`
 - `ROOFZ_BIRTH_DATE`: required when pre-applications are enabled; use `DD-MM-YYYY`
@@ -315,12 +318,15 @@ ROOFZ_EMAIL=housing@example.com
 ROOFZ_MAILTM_FORWARDER_ADDRESS=housing@example.com
 ROOFZ_PREAPPLICATION_ENABLED=1
 ROOFZ_PREAPPLICATION_API_ENABLED=1
+ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED=1
 ROOFZ_BIRTH_DATE=DD-MM-YYYY
 ROOFZ_WORK_SITUATION=Student
 ROOFZ_MONTHLY_INCOME=800
 ```
 
 mail.tm remains supported by setting `MAILBOX_PROVIDER=mailtm` and filling the `ROOFZ_MAILTM_*` variables.
+
+Roofz can send a later "Complete application" email after the pre-application. That step usually asks for document uploads, so the bot does not submit it automatically. It monitors the configured mailbox and sends the link to Telegram. For legacy Roofz applications that were started with another address, add a Gmail forwarding/filter rule for Roofz emails to the mailbox address in `HOUSING_EMAIL`, or the bot will not be able to see those messages.
 
 Then verify the mailbox:
 
