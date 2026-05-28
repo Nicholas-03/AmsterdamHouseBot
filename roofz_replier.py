@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import httpx
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
 
+from cloudflare_mailbox import CloudflareMailboxClient, CloudflareMailboxSettings
 from mailtm_preapplication import (
     MailTmClient,
     MailTmSettings,
@@ -41,7 +42,9 @@ class RoofzReplySettings:
     preapplication_poll_interval_seconds: int
     preapplication_api_url: str
     preapplication_availability_api_base: str
+    mailbox_provider: str
     mailtm: MailTmSettings
+    cloudflare_mailbox: CloudflareMailboxSettings
     initials: str
     birth_date: str
     rent_together: bool
@@ -81,7 +84,9 @@ class RoofzReplySettings:
             preapplication_poll_interval_seconds=max(1, config.ROOFZ_PREAPPLICATION_POLL_INTERVAL_SECONDS),
             preapplication_api_url=config.ROOFZ_OSRE_PREAPPLICATION_API_URL,
             preapplication_availability_api_base=config.ROOFZ_OSRE_AVAILABILITY_API_BASE,
+            mailbox_provider=config.ROOFZ_MAILBOX_PROVIDER,
             mailtm=MailTmSettings.from_config(),
+            cloudflare_mailbox=CloudflareMailboxSettings.from_config(),
             initials=config.ROOFZ_INITIALS,
             birth_date=config.ROOFZ_BIRTH_DATE,
             rent_together=config.ROOFZ_RENT_TOGETHER,
@@ -122,7 +127,11 @@ class RoofzReplySettings:
                 return "ROOFZ_MONTHLY_INCOME is missing."
             if self.preapplication_api_enabled and not self.preapplication_api_url:
                 return "ROOFZ_OSRE_PREAPPLICATION_API_URL is missing."
-            return self.mailtm.ready_error()
+            if self.mailbox_provider == "cloudflare":
+                return self.cloudflare_mailbox.ready_error()
+            if self.mailbox_provider == "mailtm":
+                return self.mailtm.ready_error()
+            return f"Unsupported ROOFZ_MAILBOX_PROVIDER: {self.mailbox_provider}"
         return None
 
 
@@ -204,12 +213,13 @@ class RoofzReplier:
     ) -> RoofzReplyResult:
         deadline = time.monotonic() + self.settings.preapplication_poll_seconds
         last_detail = "No matching unread Roofz pre-application email arrived yet."
-        with MailTmClient(self.settings.mailtm) as mailtm:
+        mailbox_settings = self._mailbox_settings()
+        with self._open_mailbox_client() as mailbox:
             while True:
                 messages = await asyncio.to_thread(
                     find_preapplication_messages,
-                    mailtm,
-                    self.settings.mailtm,
+                    mailbox,
+                    mailbox_settings,
                     listing.title,
                     started_at,
                     True,
@@ -224,7 +234,12 @@ class RoofzReplier:
                             sent_at=initial_sent_at,
                         )
 
-                    confirmation = await self._wait_for_confirmation(mailtm, listing, confirmation_started_at)
+                    confirmation = await self._wait_for_confirmation(
+                        mailbox,
+                        mailbox_settings,
+                        listing,
+                        confirmation_started_at,
+                    )
                     if confirmation:
                         return RoofzReplyResult(
                             "preapplication_confirmed",
@@ -242,13 +257,23 @@ class RoofzReplier:
                     return RoofzReplyResult("sent_preapplication_pending", last_detail, sent_at=initial_sent_at)
                 await asyncio.sleep(self.settings.preapplication_poll_interval_seconds)
 
-    async def _wait_for_confirmation(self, mailtm: MailTmClient, listing: Listing, since: datetime):
+    def _mailbox_settings(self):
+        if self.settings.mailbox_provider == "cloudflare":
+            return self.settings.cloudflare_mailbox
+        return self.settings.mailtm
+
+    def _open_mailbox_client(self):
+        if self.settings.mailbox_provider == "cloudflare":
+            return CloudflareMailboxClient(self.settings.cloudflare_mailbox)
+        return MailTmClient(self.settings.mailtm)
+
+    async def _wait_for_confirmation(self, mailbox, mailbox_settings, listing: Listing, since: datetime):
         deadline = time.monotonic() + self.settings.preapplication_poll_seconds
         while True:
             messages = await asyncio.to_thread(
                 find_confirmation_messages,
-                mailtm,
-                self.settings.mailtm,
+                mailbox,
+                mailbox_settings,
                 listing.title,
                 since,
             )

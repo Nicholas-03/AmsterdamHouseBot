@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from cloudflare_mailbox import CloudflareMailboxAuthSettings, CloudflareMailboxClient
 from mailtm_preapplication import MailTmAuthSettings, MailTmClient, find_mailtm_messages, mailtm_senders
 from scrapers.base import Listing
 
@@ -19,7 +20,9 @@ class FundaConfirmationSettings:
     enabled: bool
     poll_seconds: int
     poll_interval_seconds: int
+    mailbox_provider: str
     mailtm: MailTmAuthSettings
+    cloudflare_mailbox: CloudflareMailboxAuthSettings
     sender: str
     forwarder_address: str
     subject_patterns: tuple[str, ...]
@@ -32,10 +35,16 @@ class FundaConfirmationSettings:
             enabled=config.FUNDA_CONFIRMATION_ENABLED,
             poll_seconds=config.FUNDA_CONFIRMATION_POLL_SECONDS,
             poll_interval_seconds=max(1, config.FUNDA_CONFIRMATION_POLL_INTERVAL_SECONDS),
+            mailbox_provider=config.FUNDA_MAILBOX_PROVIDER,
             mailtm=MailTmAuthSettings(
                 api_base=config.FUNDA_MAILTM_API_BASE,
                 address=config.FUNDA_MAILTM_ADDRESS,
                 password=config.FUNDA_MAILTM_PASSWORD,
+            ),
+            cloudflare_mailbox=CloudflareMailboxAuthSettings(
+                api_base=config.CLOUDFLARE_MAILBOX_API_BASE,
+                api_token=config.CLOUDFLARE_MAILBOX_API_TOKEN,
+                address=config.CLOUDFLARE_MAILBOX_ADDRESS,
             ),
             sender=config.FUNDA_MAILTM_CONFIRMATION_SENDER,
             forwarder_address=config.FUNDA_MAILTM_FORWARDER_ADDRESS,
@@ -45,7 +54,12 @@ class FundaConfirmationSettings:
     def ready_error(self) -> str | None:
         if not self.enabled:
             return None
-        auth_error = self.mailtm.ready_error("FUNDA_MAILTM")
+        if self.mailbox_provider == "cloudflare":
+            auth_error = self.cloudflare_mailbox.ready_error("CLOUDFLARE_MAILBOX")
+        elif self.mailbox_provider == "mailtm":
+            auth_error = self.mailtm.ready_error("FUNDA_MAILTM")
+        else:
+            auth_error = f"Unsupported FUNDA_MAILBOX_PROVIDER: {self.mailbox_provider}"
         if auth_error:
             return auth_error
         if not self.sender and not self.forwarder_address:
@@ -57,6 +71,11 @@ class FundaConfirmationSettings:
     @property
     def senders(self) -> tuple[str, ...]:
         return mailtm_senders(self.sender, self.forwarder_address)
+
+    def open_client(self):
+        if self.mailbox_provider == "cloudflare":
+            return CloudflareMailboxClient(self.cloudflare_mailbox)
+        return MailTmClient(self.mailtm)
 
 
 @dataclass(frozen=True)
@@ -202,11 +221,11 @@ class FundaReplier:
         confirmation = self.settings.confirmation
         deadline = time.monotonic() + confirmation.poll_seconds
         try:
-            with MailTmClient(confirmation.mailtm) as mailtm:
+            with confirmation.open_client() as mailbox:
                 while True:
                     messages = await asyncio.to_thread(
                         find_mailtm_messages,
-                        mailtm,
+                        mailbox,
                         confirmation.senders,
                         confirmation.subject_patterns,
                         listing.title,
@@ -230,7 +249,7 @@ class FundaReplier:
             logger.exception("Funda confirmation check failed for %s", listing.url)
             return FundaReplyResult(
                 "confirmation_error",
-                f"Funda accepted the contact request, but mail.tm confirmation check failed: {exc}",
+                f"Funda accepted the contact request, but mailbox confirmation check failed: {exc}",
                 sent_at=sent_at,
             )
 

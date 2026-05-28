@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,9 @@ def find_mailtm_messages(
 def extract_preapplication_links(message: dict) -> list[str]:
     links: list[str] = []
     for body in _message_bodies(message):
-        soup = BeautifulSoup(body, "html.parser")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
+            soup = BeautifulSoup(body, "html.parser")
         for anchor in soup.find_all("a", href=True):
             text = " ".join(anchor.get_text(" ", strip=True).split())
             href = anchor["href"].strip()

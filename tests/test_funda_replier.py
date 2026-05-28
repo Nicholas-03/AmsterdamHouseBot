@@ -4,6 +4,7 @@ import unittest
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
 from funda_replier import FundaConfirmationSettings, FundaReplier, FundaReplySettings, _build_contact_payload
+from cloudflare_mailbox import CloudflareMailboxAuthSettings
 from mailtm_preapplication import MailTmAuthSettings
 from scrapers.base import Listing
 
@@ -13,10 +14,16 @@ def _confirmation(**overrides) -> FundaConfirmationSettings:
         "enabled": False,
         "poll_seconds": 1,
         "poll_interval_seconds": 1,
+        "mailbox_provider": "mailtm",
         "mailtm": MailTmAuthSettings(
             api_base="https://api.mail.tm",
             address="tenant@example.com",
             password="secret",
+        ),
+        "cloudflare_mailbox": CloudflareMailboxAuthSettings(
+            api_base="https://mailbox.example.com",
+            api_token="secret",
+            address="housing@example.com",
         ),
         "sender": "",
         "forwarder_address": "tenant@gmail.example",

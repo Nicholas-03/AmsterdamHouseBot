@@ -4,6 +4,7 @@ import unittest
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
 from mailtm_preapplication import MailTmSettings
+from cloudflare_mailbox import CloudflareMailboxSettings
 from roofz_replier import (
     RoofzReplier,
     RoofzReplySettings,
@@ -36,10 +37,21 @@ def _settings(**overrides) -> RoofzReplySettings:
         "preapplication_availability_api_base": (
             "https://financial-check.portal.prd.osre.eu/portal/financial-check/check-availability"
         ),
+        "mailbox_provider": "mailtm",
         "mailtm": MailTmSettings(
             api_base="https://api.mail.tm",
             address="tenant@example.com",
             password="secret",
+            preapplication_sender="living@rockfieldrealestate.com",
+            forwarder_address="tenant@gmail.example",
+            preapplication_subject_prefix="Start your pre-application",
+            confirmation_sender="living@rockfieldrealestate.com",
+            confirmation_subject_patterns=("confirmation", "confirmed", "received", "bevestiging", "ontvangen"),
+        ),
+        "cloudflare_mailbox": CloudflareMailboxSettings(
+            api_base="https://mailbox.example.com",
+            api_token="secret",
+            address="housing@example.com",
             preapplication_sender="living@rockfieldrealestate.com",
             forwarder_address="tenant@gmail.example",
             preapplication_subject_prefix="Start your pre-application",

@@ -1,0 +1,15 @@
+name = "amsterdam-house-mailbox"
+main = "src/index.js"
+compatibility_date = "2026-05-28"
+
+workers_dev = true
+
+[vars]
+MAILBOX_ADDRESS = "housing@nicholasboidi.tech"
+MAILBOX_RETENTION_DAYS = "14"
+# Optional: forward a human-readable copy after saving it for the bot.
+# FORWARD_TO = "you@example.com"
+
+[[kv_namespaces]]
+binding = "MAILBOX"
+id = "replace-with-kv-namespace-id"

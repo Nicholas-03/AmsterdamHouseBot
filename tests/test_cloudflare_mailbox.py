@@ -1,0 +1,51 @@
+import unittest
+
+from cloudflare_mailbox import (
+    CloudflareMailboxAuthSettings,
+    _normalize_full_message,
+)
+from mailtm_preapplication import extract_preapplication_links
+
+
+class CloudflareMailboxTests(unittest.TestCase):
+    def test_ready_error_requires_api_base_and_token(self):
+        self.assertEqual(
+            CloudflareMailboxAuthSettings(api_base="", api_token="token").ready_error(),
+            "CLOUDFLARE_MAILBOX_API_BASE is missing.",
+        )
+        self.assertEqual(
+            CloudflareMailboxAuthSettings(api_base="https://mailbox.example.com", api_token="").ready_error(),
+            "CLOUDFLARE_MAILBOX_API_TOKEN is missing.",
+        )
+
+    def test_normalizes_raw_mime_for_existing_link_extractor(self):
+        raw = (
+            "From: ROOFZ.eu <living@rockfieldrealestate.com>\r\n"
+            "To: housing@nicholasboidi.tech\r\n"
+            "Subject: Start your pre-application for Jan van Galenstraat 502, Amsterdam.\r\n"
+            "Content-Type: text/html; charset=utf-8\r\n"
+            "\r\n"
+            '<a href="https://roofz.onosre.com/invitation/invite-id/token/token-id/greeting">'
+            "Start pre-application</a>"
+        )
+
+        message = _normalize_full_message(
+            {
+                "id": "abc",
+                "subject": "Start your pre-application",
+                "from": {"address": "living@rockfieldrealestate.com"},
+                "createdAt": "2026-05-28T10:00:00Z",
+                "raw": raw,
+            }
+        )
+
+        self.assertEqual(message["from"]["address"], "living@rockfieldrealestate.com")
+        self.assertTrue(message["html"])
+        self.assertEqual(
+            extract_preapplication_links(message),
+            ["https://roofz.onosre.com/invitation/invite-id/token/token-id/greeting"],
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
