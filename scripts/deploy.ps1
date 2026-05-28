@@ -153,6 +153,7 @@ $timestamp = Get-Date -Format "yyyyMMddHHmmss"
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "amsterdam-house-bot-deploy-$timestamp"
 $staging = Join-Path $tempRoot "package"
 $archive = Join-Path $tempRoot "amsterdam-house-bot.zip"
+$envLfPath = Join-Path $tempRoot "bot.env"
 $bootstrapLfPath = Join-Path $tempRoot "vps_bootstrap.sh"
 $target = "${User}@${DropletHost}"
 $remoteArchive = "/tmp/amsterdam-house-bot-$timestamp.zip"
@@ -168,11 +169,13 @@ try {
     Invoke-Native "scp" @identityArgs $archive "${target}:$remoteArchive"
 
     Write-Host "Uploading environment file"
-    Invoke-Native "scp" @identityArgs $envPath "${target}:$remoteEnv"
+    $envContent = [System.IO.File]::ReadAllText($envPath).Replace("`r`n", "`n").Replace("`r", "`n")
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($envLfPath, $envContent, $utf8NoBom)
+    Invoke-Native "scp" @identityArgs $envLfPath "${target}:$remoteEnv"
 
     Write-Host "Uploading bootstrap script"
     $bootstrapContent = [System.IO.File]::ReadAllText($bootstrapPath).Replace("`r`n", "`n")
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($bootstrapLfPath, $bootstrapContent, $utf8NoBom)
     Invoke-Native "scp" @identityArgs $bootstrapLfPath "${target}:$remoteBootstrap"
 
