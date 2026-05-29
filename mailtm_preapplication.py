@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import unescape
+import quopri
 import re
 import warnings
 from dataclasses import dataclass
@@ -236,12 +238,13 @@ def extract_preapplication_links(message: dict) -> list[str]:
             soup = BeautifulSoup(body, "html.parser")
         for anchor in soup.find_all("a", href=True):
             text = " ".join(anchor.get_text(" ", strip=True).split())
-            href = anchor["href"].strip()
-            if _looks_like_preapplication_link(text, href):
+            href = _clean_link(anchor["href"])
+            if href and _looks_like_preapplication_link(text, href):
                 links.append(href)
         for href in re.findall(r"https?://[^\s<>\"]+", body):
-            if _looks_like_preapplication_link("", href):
-                links.append(href.rstrip(").,"))
+            href = _clean_link(href)
+            if href and _looks_like_preapplication_link("", href):
+                links.append(href)
     return list(dict.fromkeys(links))
 
 
@@ -253,12 +256,13 @@ def extract_complete_application_links(message: dict) -> list[str]:
             soup = BeautifulSoup(body, "html.parser")
         for anchor in soup.find_all("a", href=True):
             text = " ".join(anchor.get_text(" ", strip=True).split())
-            href = anchor["href"].strip()
-            if _looks_like_complete_application_link(text, href):
+            href = _clean_link(anchor["href"])
+            if href and _looks_like_complete_application_link(text, href):
                 links.append(href)
         for href in re.findall(r"https?://[^\s<>\"]+", body):
-            if _looks_like_complete_application_link("", href):
-                links.append(href.rstrip(").,"))
+            href = _clean_link(href)
+            if href and _looks_like_complete_application_link("", href):
+                links.append(href)
     return list(dict.fromkeys(links))
 
 
@@ -309,13 +313,47 @@ def _message_bodies(message: dict) -> list[str]:
     bodies: list[str] = []
     text = message.get("text")
     if isinstance(text, str):
-        bodies.append(text)
+        bodies.extend(_body_variants(text))
     html = message.get("html")
     if isinstance(html, list):
-        bodies.extend(part for part in html if isinstance(part, str))
+        for part in html:
+            if isinstance(part, str):
+                bodies.extend(_body_variants(part))
     elif isinstance(html, str):
-        bodies.append(html)
-    return bodies
+        bodies.extend(_body_variants(html))
+    return list(dict.fromkeys(body for body in bodies if body))
+
+
+def _body_variants(body: str) -> list[str]:
+    decoded = _decode_quoted_printable(body)
+    if decoded and decoded != body:
+        return [decoded, body]
+    return [body]
+
+
+def _decode_quoted_printable(body: str) -> str:
+    if "=3D" not in body and "=\r" not in body and "=\n" not in body:
+        return body
+    try:
+        return quopri.decodestring(body.encode("utf-8", errors="replace")).decode(
+            "utf-8",
+            errors="replace",
+        )
+    except Exception:
+        return body
+
+
+def _clean_link(href: str) -> str:
+    raw = str(href or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("3D", "=3D")) or "=3D" in raw:
+        return ""
+    cleaned = unescape(raw).strip().strip("<>'\"")
+    cleaned = cleaned.rstrip(").,;'\"")
+    if not re.match(r"^https?://", cleaned, re.I):
+        return ""
+    return cleaned
 
 
 def mailtm_senders(*values: str) -> tuple[str, ...]:

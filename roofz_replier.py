@@ -226,11 +226,12 @@ class RoofzReplier:
                 )
                 if messages:
                     confirmation_started_at = datetime.now(timezone.utc)
-                    result = await self.complete_preapplication(messages[0].links[0])
-                    if result.status not in {"preapplication_sent", "preapplication_submitted_unconfirmed"}:
+                    result = await self._complete_first_working_preapplication_link(messages)
+                    if not result or result.status not in {"preapplication_sent", "preapplication_submitted_unconfirmed"}:
+                        detail = result.detail if result else "No usable pre-application link was found."
                         return RoofzReplyResult(
                             "sent_preapplication_failed",
-                            f"Initial contact was sent, but pre-application failed: {result.detail}",
+                            f"Initial contact was sent, but pre-application failed: {detail}",
                             sent_at=initial_sent_at,
                         )
 
@@ -256,6 +257,26 @@ class RoofzReplier:
                 if time.monotonic() >= deadline:
                     return RoofzReplyResult("sent_preapplication_pending", last_detail, sent_at=initial_sent_at)
                 await asyncio.sleep(self.settings.preapplication_poll_interval_seconds)
+
+    async def _complete_first_working_preapplication_link(self, messages) -> RoofzReplyResult | None:
+        last_result: RoofzReplyResult | None = None
+        seen_links: set[str] = set()
+        for message in messages:
+            for link in message.links:
+                if link in seen_links:
+                    continue
+                seen_links.add(link)
+                result = await self.complete_preapplication(link)
+                if result.status in {"preapplication_sent", "preapplication_submitted_unconfirmed"}:
+                    return result
+                last_result = result
+                logger.warning(
+                    "Roofz pre-application link failed for message %s: %s (%s)",
+                    getattr(message, "message_id", ""),
+                    result.status,
+                    result.detail,
+                )
+        return last_result
 
     def _mailbox_settings(self):
         if self.settings.mailbox_provider == "cloudflare":

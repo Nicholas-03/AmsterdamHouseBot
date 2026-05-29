@@ -93,10 +93,9 @@ class CloudflareMailboxClient:
         message = response.json()
         if not isinstance(message, dict):
             return {}
-        self._mark_seen(message_id)
         return _normalize_full_message(message)
 
-    def _mark_seen(self, message_id: str) -> None:
+    def mark_seen(self, message_id: str) -> None:
         try:
             self._client.post(
                 f"{self.settings.api_base}/messages/{message_id}/seen",

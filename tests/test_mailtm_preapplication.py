@@ -69,6 +69,40 @@ class MailTmPreApplicationTests(unittest.TestCase):
             ],
         )
 
+    def test_extract_preapplication_link_decodes_quoted_printable_html(self):
+        message = {
+            "html": [
+                (
+                    '<a href=3D"http://tracking.osre.nl/ls/click?upn=3Du001.kPEKN1Gs'
+                    'HZ-2BVb6l2c2A6M0N6Ws">Start pre-application</a>'
+                )
+            ],
+        }
+
+        self.assertEqual(
+            extract_preapplication_links(message),
+            ["http://tracking.osre.nl/ls/click?upn=u001.kPEKN1GsHZ-2BVb6l2c2A6M0N6Ws"],
+        )
+
+    def test_extract_preapplication_link_skips_raw_quoted_printable_artifacts(self):
+        message = {
+            "html": [
+                (
+                    '<a href=3D"http://tracking.osre.nl/ls/click?upn=3Du001.bad">'
+                    "Start pre-application</a>"
+                    '<a href="https://roofz.onosre.com/invitation/abc/token/def">Open form</a>'
+                )
+            ],
+        }
+
+        self.assertEqual(
+            extract_preapplication_links(message),
+            [
+                "http://tracking.osre.nl/ls/click?upn=u001.bad",
+                "https://roofz.onosre.com/invitation/abc/token/def",
+            ],
+        )
+
     def test_extract_complete_application_link_from_html(self):
         message = {
             "html": [

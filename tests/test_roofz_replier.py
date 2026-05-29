@@ -7,6 +7,7 @@ from mailtm_preapplication import MailTmSettings
 from cloudflare_mailbox import CloudflareMailboxSettings
 from roofz_replier import (
     RoofzReplier,
+    RoofzReplyResult,
     RoofzReplySettings,
     _build_contact_payload,
     _build_preapplication_payload,
@@ -165,6 +166,26 @@ class RoofzReplierTests(unittest.IsolatedAsyncioTestCase):
             result = await replier.reply_to_listing(_listing(reply_data={"property_id": ""}))
 
         self.assertEqual(result.status, "missing_contact_data")
+
+    async def test_preapplication_completion_tries_next_link_after_failure(self):
+        class Message:
+            message_id = "message-1"
+            links = ["bad-link", "good-link"]
+
+        async with RoofzReplier(_settings()) as replier:
+            calls = []
+
+            async def fake_complete(link):
+                calls.append(link)
+                if link == "good-link":
+                    return RoofzReplyResult("preapplication_sent", "ok")
+                return RoofzReplyResult("preapplication_api_unavailable", "bad")
+
+            replier.complete_preapplication = fake_complete
+            result = await replier._complete_first_working_preapplication_link([Message()])
+
+        self.assertEqual(calls, ["bad-link", "good-link"])
+        self.assertEqual(result.status, "preapplication_sent")
 
 
 if __name__ == "__main__":
