@@ -46,6 +46,23 @@ class CloudflareMailboxTests(unittest.TestCase):
             ["https://roofz.onosre.com/invitation/invite-id/token/token-id/greeting"],
         )
 
+    def test_preserves_forward_status_metadata(self):
+        message = _normalize_full_message(
+            {
+                "id": "abc",
+                "subject": "Forward status",
+                "from": {"address": "sender@example.com"},
+                "forward": {
+                    "to": "person@example.com",
+                    "status": "failed",
+                    "error": "not verified",
+                },
+            }
+        )
+
+        self.assertEqual(message["forward"]["status"], "failed")
+        self.assertEqual(message["forward"]["to"], "person@example.com")
+
 
 if __name__ == "__main__":
     unittest.main()

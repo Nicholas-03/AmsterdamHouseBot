@@ -544,9 +544,10 @@ def _index_html(address: str) -> str:
         const unread = message.seen ? "" : " unread";
         const active = message.id === selectedId ? " active" : "";
         const links = Array.isArray(message.links) && message.links.length ? `<span class="badge">${{message.links.length}} links</span>` : "";
+        const forward = message.forward && message.forward.status ? `<span class="badge">forward: ${{escapeHtml(message.forward.status)}}</span>` : "";
         return `
           <button class="message-row${{unread}}${{active}}" onclick="openMessage('${{message.id}}')">
-            <div class="subject">${{escapeHtml(message.subject || "(no subject)")}}${{links}}</div>
+            <div class="subject">${{escapeHtml(message.subject || "(no subject)")}}${{links}}${{forward}}</div>
             <div class="meta">${{escapeHtml(sender)}} · ${{escapeHtml(fmtDate(message.createdAt))}}</div>
           </button>`;
       }}).join("");
@@ -586,6 +587,10 @@ def _index_html(address: str) -> str:
       if (!message) return;
       const sender = (message.from && message.from.address) || "";
       const links = Array.isArray(message.links) ? message.links : [];
+      const forward = message.forward || null;
+      const forwardText = forward && forward.status
+        ? `Forward: ${{forward.status}}${{forward.to ? " to " + forward.to : ""}}${{forward.error ? " (" + forward.error + ")" : ""}}`
+        : "";
       const detail = document.getElementById("detail");
       detail.innerHTML = `
         <div class="detail-head">
@@ -593,6 +598,7 @@ def _index_html(address: str) -> str:
           <div class="meta">From: ${{escapeHtml(sender)}}</div>
           <div class="meta">To: ${{escapeHtml(message.to || "")}}</div>
           <div class="meta">Date: ${{escapeHtml(fmtDate(message.createdAt))}}</div>
+          ${{forwardText ? `<div class="meta">${{escapeHtml(forwardText)}}</div>` : ""}}
           <div class="actions">
             <button onclick="markSeen()">${{message.seen ? "Seen" : "Mark seen"}}</button>
             <button onclick="window.location='/api/messages/${{encodeURIComponent(message.id)}}/eml'">Download .eml</button>

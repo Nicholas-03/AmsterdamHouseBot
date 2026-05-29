@@ -38,9 +38,22 @@ export default {
   async email(message, env, ctx) {
     const raw = await new Response(message.raw).text();
     const record = buildEmailRecord(message, raw);
-    ctx.waitUntil(saveMessage(env, record));
+    record.forward = {
+      to: env.FORWARD_TO || "",
+      status: env.FORWARD_TO ? "pending" : "not_configured",
+      updatedAt: record.createdAt,
+    };
+    await saveMessage(env, record);
     if (env.FORWARD_TO) {
-      await message.forward(env.FORWARD_TO);
+      try {
+        await message.forward(env.FORWARD_TO);
+        record.forward.status = "sent";
+      } catch (error) {
+        record.forward.status = "failed";
+        record.forward.error = error instanceof Error ? error.message : String(error);
+      }
+      record.forward.updatedAt = new Date().toISOString();
+      ctx.waitUntil(saveMessage(env, record));
     }
   },
 };
@@ -164,6 +177,7 @@ function summaryFor(record) {
     to: record.to || "",
     seen: Boolean(record.seen),
     links: Array.isArray(record.links) ? record.links.slice(0, 10) : [],
+    forward: record.forward || null,
   };
 }
 
