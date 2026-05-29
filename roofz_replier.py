@@ -53,6 +53,7 @@ class RoofzReplySettings:
     monthly_income: str
     annual_income: str
     savings: str
+    bank_name: str
     expected_stay_duration: str
     expected_move_date: str
     gender: str
@@ -95,6 +96,7 @@ class RoofzReplySettings:
             monthly_income=config.ROOFZ_MONTHLY_INCOME,
             annual_income=config.ROOFZ_ANNUAL_INCOME,
             savings=config.ROOFZ_SAVINGS,
+            bank_name=config.ROOFZ_BANK_NAME,
             expected_stay_duration=config.ROOFZ_EXPECTED_STAY_DURATION,
             expected_move_date=config.ROOFZ_EXPECTED_MOVE_DATE,
             gender=config.ROOFZ_GENDER,
@@ -567,7 +569,7 @@ def _build_preapplication_payload(settings: RoofzReplySettings, invitation_id: s
                 "financialSituation": {
                     "financialSavings": _parse_amount(settings.savings),
                     "financialCredits": 0,
-                    "bankName": None,
+                    "bankName": settings.bank_name or None,
                     "bankAccount": None,
                     "otherBankName": None,
                     "otherBankAccount": None,
@@ -704,6 +706,8 @@ async def _fill_preapplication_form(page, settings: RoofzReplySettings) -> None:
         "annual income": settings.annual_income,
         "savings": settings.savings,
         "equity": settings.savings,
+        "bank name": settings.bank_name,
+        "bank": settings.bank_name,
     }
     controls = page.locator("input:not([type='hidden']), textarea, select, mat-select")
     count = await controls.count()

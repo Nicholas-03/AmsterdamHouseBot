@@ -67,6 +67,7 @@ def _settings(**overrides) -> RoofzReplySettings:
         "monthly_income": "1000",
         "annual_income": "12000",
         "savings": "100000",
+        "bank_name": "Test Bank",
         "expected_stay_duration": "1 year",
         "expected_move_date": "01/07/2026",
         "gender": "Male",
@@ -139,14 +140,25 @@ class RoofzReplySettingsTests(unittest.TestCase):
         )
 
     def test_build_preapplication_payload_matches_osre_api_shape(self):
-        payload = _build_preapplication_payload(_settings(birth_date="21-04-2003", monthly_income="800"), "invite-id")
+        payload = _build_preapplication_payload(
+            _settings(
+                birth_date="21-04-2003",
+                monthly_income="800",
+                savings="300000",
+                bank_name="Intesa san Paolo",
+            ),
+            "invite-id",
+        )
 
         person = payload["application"]["person"]
+        financial = person["financialSituation"]
         self.assertEqual(payload["invitationId"], "invite-id")
         self.assertEqual(person["personalDetails"]["dateOfBirth"], "2003-04-21")
         self.assertEqual(person["personalDetails"]["gender"], "male")
         self.assertEqual(person["workSituation"]["workSituation"], "student")
         self.assertEqual(person["workSituation"]["workMonthlySalary"], 800)
+        self.assertEqual(financial["financialSavings"], 300000)
+        self.assertEqual(financial["bankName"], "Intesa san Paolo")
 
     def test_radio_option_matching_does_not_match_male_inside_female(self):
         self.assertTrue(_radio_option_matches("male", "male", "Male"))

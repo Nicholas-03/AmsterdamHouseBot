@@ -165,7 +165,7 @@ Roofz auto-reply variables:
 - `ROOFZ_CURRENT_LIVING_SITUATION`: optional, defaults to `Single without children`
 - `ROOFZ_WORK_SITUATION`: optional, defaults to `Student`
 - `ROOFZ_MONTHLY_INCOME`: required when pre-applications are enabled; gross monthly income for OSRE work/income questions
-- `ROOFZ_ANNUAL_INCOME`, `ROOFZ_SAVINGS`: optional values used if the OSRE pre-application asks annual income or savings questions
+- `ROOFZ_ANNUAL_INCOME`, `ROOFZ_SAVINGS`, `ROOFZ_BANK_NAME`: optional values used if the OSRE pre-application asks annual income, savings, or bank questions
 
 ### 5. Start the bot
 
