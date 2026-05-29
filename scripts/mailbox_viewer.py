@@ -314,6 +314,15 @@ def _index_html(address: str) -> str:
       padding: 12px;
       border-bottom: 1px solid var(--line);
     }}
+    .list-status {{
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }}
     input, button {{
       height: 34px;
       border: 1px solid var(--line);
@@ -339,6 +348,8 @@ def _index_html(address: str) -> str:
     .message-row {{
       display: grid;
       gap: 4px;
+      height: auto;
+      min-height: 66px;
       width: 100%;
       padding: 12px;
       border: 0;
@@ -346,6 +357,7 @@ def _index_html(address: str) -> str:
       text-align: left;
       border-radius: 0;
       background: #fff;
+      color: var(--text);
     }}
     .message-row:hover, .message-row.active {{ background: #f0faf8; }}
     .message-row.unread .subject {{ font-weight: 750; }}
@@ -469,6 +481,7 @@ def _index_html(address: str) -> str:
         <input id="search" placeholder="Search subject or sender" oninput="renderList()">
         <button onclick="loadMessages()">Reload</button>
       </div>
+      <div id="list-status" class="list-status">Loading mailbox...</div>
       <div id="list"></div>
     </aside>
     <section>
@@ -499,12 +512,15 @@ def _index_html(address: str) -> str:
 
     async function loadMessages() {{
       const list = document.getElementById("list");
+      const status = document.getElementById("list-status");
+      status.textContent = "Loading mailbox...";
       list.innerHTML = '<div class="empty">Loading emails...</div>';
       try {{
         const payload = await requestJson("/api/messages?limit=100");
         messages = payload.messages || [];
         renderList();
       }} catch (error) {{
+        status.textContent = "Mailbox API error";
         list.innerHTML = `<div class="empty error">${{escapeHtml(error.message)}}</div>`;
       }}
     }}
@@ -516,6 +532,9 @@ def _index_html(address: str) -> str:
         return !query || `${{message.subject || ""}} ${{sender}}`.toLowerCase().includes(query);
       }});
       const list = document.getElementById("list");
+      const status = document.getElementById("list-status");
+      const unread = messages.filter((message) => !message.seen).length;
+      status.textContent = `${{filtered.length}} email${{filtered.length === 1 ? "" : "s"}} shown · ${{unread}} unread`;
       if (!filtered.length) {{
         list.innerHTML = '<div class="empty">No matching emails.</div>';
         return;
