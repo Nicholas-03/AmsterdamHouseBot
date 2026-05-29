@@ -153,6 +153,7 @@ Roofz auto-reply variables:
 - `ROOFZ_MAILTM_PASSWORD`: optional fallback mail.tm password for the official mail.tm API
 - `ROOFZ_MAILTM_FORWARDER_ADDRESS`: optional, defaults to `ROOFZ_EMAIL`; for Cloudflare this should normally match the mailbox address used in `ROOFZ_EMAIL`
 - `ROOFZ_PREAPPLICATION_ENABLED`: optional, set to `1` to poll the configured mailbox for Roofz pre-application links, complete the OSRE form, and check for a confirmation email after the first contact request
+- `ROOFZ_PREAPPLICATION_POLL_SECONDS`: optional, defaults to `420`; wait time for delayed Roofz pre-application and confirmation emails
 - `ROOFZ_PREAPPLICATION_API_ENABLED`: optional, defaults to `1`; resolves OSRE email links and submits the pre-application through the OSRE API before falling back to browser automation
 - `ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED`: optional, defaults to `ROOFZ_PREAPPLICATION_ENABLED`; watches the configured mailbox for later Roofz "Complete application" emails and forwards the link to Telegram
 - `ROOFZ_COMPLETE_APPLICATION_MONITOR_INTERVAL_SECONDS`: optional, defaults to `300`

@@ -63,7 +63,7 @@ class CloudflareMailboxSettings(CloudflareMailboxAuthSettings):
 class CloudflareMailboxClient:
     def __init__(self, settings: CloudflareMailboxAuthSettings):
         self.settings = settings
-        self._client = httpx.Client(timeout=30)
+        self._client = httpx.Client(timeout=90)
 
     def __enter__(self) -> CloudflareMailboxClient:
         return self
