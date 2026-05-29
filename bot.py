@@ -19,7 +19,7 @@ import config
 import db
 from funda_replier import FundaReplySettings
 from kamernet_replier import KamernetReplySettings
-from notification_sources import ALL_SOURCES, format_sources, normalize_sources, parse_source_tokens
+from notification_sources import ALL_SOURCES, SOURCE_LABELS, format_sources, normalize_sources, parse_source_tokens
 from roofz_mailbox_monitor import find_new_complete_application_emails
 from roofz_replier import RoofzReplySettings
 from scanner import run_scan_for_user
@@ -963,16 +963,7 @@ async def _build_daily_summary_text() -> str:
     level_counts = await db.get_level_counts_since(hours=24)
     auto_summary = await db.get_auto_reply_summary_since(hours=24)
     scan_age = _event_age_seconds(latest_scan) if latest_scan else None
-    return "\n".join(
-        [
-            "Daily housing summary:",
-            f"New listings last 24h: {_format_count_rows(listing_counts)}",
-            f"Auto-replies last 24h: {_format_auto_reply_summary_rows(auto_summary)}",
-            f"Warnings/errors: {level_counts.get('warning', 0)} warnings, {level_counts.get('error', 0)} errors",
-            "Last completed scan: "
-            + (_format_age(scan_age) + " ago" if scan_age is not None else "never recorded"),
-        ]
-    )
+    return _format_daily_summary_text(listing_counts, auto_summary, level_counts, scan_age)
 
 
 def _format_filters(user_filters: dict) -> str:
@@ -1156,6 +1147,104 @@ def _format_auto_reply_summary_rows(rows: list[dict]) -> str:
         f"{row.get('source') or 'unknown'} {row.get('status') or 'unknown'} {row.get('count') or 0}"
         for row in rows
     )
+
+
+def _format_daily_summary_text(
+    listing_counts: list[dict],
+    auto_summary: list[dict],
+    level_counts: dict,
+    scan_age: float | None,
+) -> str:
+    lines = [
+        "Daily housing summary",
+        "Last 24h",
+        "",
+        "New listings",
+        *_format_daily_count_lines(listing_counts),
+        "",
+        "Auto-replies",
+        *_format_daily_auto_reply_lines(auto_summary),
+        "",
+        "Warnings / errors",
+        f"- Warnings: {_format_plural_count(level_counts.get('warning', 0), 'warning')}",
+        f"- Errors: {_format_plural_count(level_counts.get('error', 0), 'error')}",
+        "",
+        "Health",
+        "- Last completed scan: "
+        + (_format_age(scan_age) + " ago" if scan_age is not None else "never recorded"),
+    ]
+    return "\n".join(lines)
+
+
+def _format_daily_count_lines(rows: list[dict]) -> list[str]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        source = row.get("source") or row.get("status") or "total"
+        counts[source] = counts.get(source, 0) + int(row.get("count") or 0)
+    if not counts:
+        return ["- None"]
+    return [
+        f"- {_source_label(source)}: {count}"
+        for source, count in sorted(counts.items(), key=lambda item: _source_sort_key(item[0]))
+    ]
+
+
+def _format_daily_auto_reply_lines(rows: list[dict]) -> list[str]:
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        source = row.get("source") or "unknown"
+        status = row.get("status") or "unknown"
+        count = int(row.get("count") or 0)
+        grouped.setdefault(source, []).append(f"{count} {_auto_reply_status_label(status, count)}")
+    if not grouped:
+        return ["- None"]
+    return [
+        f"- {_source_label(source)}: {', '.join(statuses)}"
+        for source, statuses in sorted(grouped.items(), key=lambda item: _source_sort_key(item[0]))
+    ]
+
+
+def _auto_reply_status_label(status: str, count: int) -> str:
+    labels = {
+        "sent": "sent",
+        "submitted_unconfirmed": "submitted, unconfirmed",
+        "confirmation_confirmed": "confirmation confirmed",
+        "confirmation_missing": "confirmation missing",
+        "confirmation_error": "confirmation error",
+        "preapplication_confirmed": "pre-application confirmed",
+        "preapplication_sent": "pre-application sent",
+        "preapplication_confirmation_missing": "pre-application confirmation missing",
+        "sent_preapplication_pending": "pre-application pending",
+        "sent_preapplication_failed": "pre-application failed",
+        "needs_verification": "needs verification",
+        "login_failed": "login failed",
+        "error": "error",
+    }
+    label = labels.get(status, status.replace("_", " "))
+    if count == 1:
+        return label
+    plural_labels = {
+        "needs verification": "need verification",
+        "error": "errors",
+    }
+    return plural_labels.get(label, label)
+
+
+def _format_plural_count(count, singular: str) -> str:
+    value = int(count or 0)
+    suffix = "" if value == 1 else "s"
+    return f"{value} {singular}{suffix}"
+
+
+def _source_label(source: str) -> str:
+    return SOURCE_LABELS.get(source, source.capitalize() if source else "Unknown")
+
+
+def _source_sort_key(source: str) -> tuple[int, str]:
+    try:
+        return (ALL_SOURCES.index(source), source)
+    except ValueError:
+        return (len(ALL_SOURCES), source)
 
 
 def _event_age_seconds(event: dict | None) -> float | None:
