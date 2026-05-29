@@ -6,9 +6,9 @@ import re
 from collections.abc import Iterable
 from urllib.parse import urlencode
 
-import httpx
 from bs4 import BeautifulSoup
 
+from ._resilient_fetch import fetch_html
 from .base import BaseScraper, Listing, parse_euro_amount, parse_first_int
 
 logger = logging.getLogger(__name__)
@@ -90,12 +90,10 @@ class KamernetScraper(BaseScraper):
     async def scrape(self) -> list[Listing]:
         self.last_error = ""
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                await asyncio.sleep(random.uniform(2.0, 4.0))
-                response = await client.get(self._build_url(), headers=_HEADERS)
-                response.raise_for_status()
+            await asyncio.sleep(random.uniform(2.0, 4.0))
+            html = await fetch_html(self._build_url(), _HEADERS, source=self.SOURCE, timeout=30)
 
-            soup = BeautifulSoup(response.text, "lxml")
+            soup = BeautifulSoup(html, "lxml")
             listings = []
             next_data = soup.select_one("script#__NEXT_DATA__")
             if next_data and next_data.string:

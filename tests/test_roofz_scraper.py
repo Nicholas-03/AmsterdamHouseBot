@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from scrapers.roofz import RoofzScraper
 
@@ -49,6 +50,24 @@ class RoofzScraperTests(unittest.TestCase):
 
         self.assertIsNotNone(listing)
         self.assertEqual(listing.title, "Spaklerweg 14 E-4")
+
+
+class RoofzNavigationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_goto_retries_once_after_transient_navigation_error(self):
+        class FakePage:
+            attempts = 0
+
+            async def goto(self, *_args, **_kwargs):
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise RuntimeError("temporary timeout")
+
+        page = FakePage()
+        with patch("scrapers.roofz.asyncio.sleep", AsyncMock()) as sleep:
+            await RoofzScraper()._goto_with_retries(page, "https://www.roofz.eu/huur/woningen")
+
+        self.assertEqual(page.attempts, 2)
+        sleep.assert_awaited_once()
 
 
 if __name__ == "__main__":

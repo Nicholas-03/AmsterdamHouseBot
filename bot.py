@@ -5,6 +5,7 @@ from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -175,7 +176,7 @@ async def _run_scan_job(
     if _SCAN_LOCK.locked():
         await db.log_event(
             started_event.replace("_started", "_skipped"),
-            level="warning",
+            level="info",
             status="scan_already_running",
             data={"source_filter": sorted(source_filter) if source_filter else None},
         )
@@ -776,8 +777,20 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.exception("Telegram handler failed for update %s", update, exc_info=context.error)
-    await db.log_event("telegram_handler_failed", level="error", status="error", detail=str(context.error))
+    error = context.error
+    if _is_transient_telegram_polling_error(update, error):
+        detail = str(error)
+        logger.warning("Transient Telegram polling error: %s", detail)
+        await db.log_event(
+            "telegram_polling_transient_error",
+            level="warning",
+            status="transient",
+            detail=detail,
+        )
+        return
+
+    logger.exception("Telegram handler failed for update %s", update, exc_info=error)
+    await db.log_event("telegram_handler_failed", level="error", status="error", detail=str(error))
 
 
 def _is_authorized(update: Update) -> bool:
@@ -786,6 +799,24 @@ def _is_authorized(update: Update) -> bool:
     if not update.effective_chat:
         return False
     return update.effective_chat.id in config.TELEGRAM_ALLOWED_CHAT_IDS
+
+
+def _is_transient_telegram_polling_error(update: object, error: object) -> bool:
+    if update is not None:
+        return False
+    if isinstance(error, (NetworkError, TimedOut)):
+        return True
+    detail = str(error).casefold()
+    return any(
+        marker in detail
+        for marker in (
+            "bad gateway",
+            "gateway timeout",
+            "timed out",
+            "connection reset",
+            "connection aborted",
+        )
+    )
 
 
 async def _ensure_authorized(update: Update) -> bool:

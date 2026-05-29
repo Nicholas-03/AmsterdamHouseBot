@@ -8,6 +8,9 @@ from .base import BaseScraper, Listing, parse_euro_amount, parse_first_int
 
 logger = logging.getLogger(__name__)
 
+_NAVIGATION_ATTEMPTS = 2
+_NAVIGATION_TIMEOUT_MS = 30000
+
 
 class RoofzScraper(BaseScraper):
     SOURCE = "roofz"
@@ -38,14 +41,22 @@ class RoofzScraper(BaseScraper):
             browser = await playwright.chromium.launch(headless=True, timeout=30000)
             page = await browser.new_page(viewport={"width": 1440, "height": 1200})
 
+            last_url_error = ""
             for url in self._urls():
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                await self._settle_page(page)
-                await self._try_select_city(page)
-                listings = await self._extract_listings(page)
+                try:
+                    listings = await self._load_listings_from_url(page, url)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    last_url_error = str(exc)
+                    logger.warning("Roofz navigation failed for %s: %s", url, exc)
+                    continue
                 listings = [listing for listing in listings if self._matches_filters(listing)]
                 if listings:
                     break
+
+            if not listings and last_url_error:
+                self.last_error = f"All Roofz search URLs failed; last error: {last_url_error}"
 
         except asyncio.CancelledError:
             logger.warning("Roofz scrape was cancelled before completion.")
@@ -68,6 +79,27 @@ class RoofzScraper(BaseScraper):
 
         logger.info("Roofz: found %d matching listings", len(listings))
         return listings
+
+    async def _load_listings_from_url(self, page, url: str) -> list[Listing]:
+        await self._goto_with_retries(page, url)
+        await self._settle_page(page)
+        await self._try_select_city(page)
+        return await self._extract_listings(page)
+
+    async def _goto_with_retries(self, page, url: str) -> None:
+        last_error: Exception | None = None
+        for attempt in range(_NAVIGATION_ATTEMPTS):
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=_NAVIGATION_TIMEOUT_MS)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                if attempt < _NAVIGATION_ATTEMPTS - 1:
+                    await asyncio.sleep(1.0 + attempt)
+        if last_error:
+            raise last_error
 
     async def _settle_page(self, page) -> None:
         for label in ("Accept", "Akkoord", "Allow all", "Alles accepteren"):
