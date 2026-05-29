@@ -227,7 +227,19 @@ Operational event logging writes scan starts/finishes, fast-scan activity, scrap
 
 Keep tokens, passwords, personal form data, and reply messages in `.env`. Do not commit real `.env` files, saved browser sessions, local databases, or reply-message text files. For VPS deployment, prefer inline `KAMERNET_REPLY_MESSAGE`, `FUNDA_REPLY_MESSAGE`, and `ROOFZ_REPLY_MESSAGE` values in `.env`; local `*_REPLY_MESSAGE_FILE` paths are not uploaded by the deploy script.
 
-The Cloudflare mailbox Worker lives in `cloudflare-mailbox-worker/`. It expects a KV namespace bound as `MAILBOX`, a secret named `API_TOKEN`, and an Email Routing rule that sends the chosen inbox address to the Worker. The HTTP API exposes `/health`, authenticated `/messages`, `/messages/{id}`, and `/messages/{id}/seen`. Use `cloudflare-mailbox-worker/wrangler.toml.example` as the local template, but keep the real token and namespace IDs out of git.
+The Cloudflare mailbox Worker lives in `cloudflare-mailbox-worker/`. It expects a KV namespace bound as `MAILBOX`, a secret named `API_TOKEN`, and an Email Routing rule that sends the chosen inbox address to the Worker. The HTTP API exposes `/health`, authenticated `/messages`, `/messages/{id}`, and `/messages/{id}/seen`. Use `cloudflare-mailbox-worker/wrangler.toml.example` as the local template, but keep the real token and namespace IDs out of git. Set the Worker plain-text variable `FORWARD_TO` to a personal inbox if you also want every new mailbox email forwarded after it is saved for the bot.
+
+To read the Cloudflare mailbox in a clearer local UI:
+
+```bash
+python scripts/mailbox_viewer.py
+```
+
+The viewer opens on localhost, reads `CLOUDFLARE_MAILBOX_API_BASE` and `CLOUDFLARE_MAILBOX_API_TOKEN` from `.env`, and lets you search, open links, mark messages seen, and download stored messages as `.eml` files. To only verify access:
+
+```bash
+python scripts/mailbox_viewer.py --check
+```
 
 Keep dry-run enabled for the first real test:
 
