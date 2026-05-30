@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -22,6 +22,23 @@ from playwright.async_api import (
 from scrapers.base import Listing
 
 logger = logging.getLogger(__name__)
+
+_KAMERNET_API_BASE = "https://kamernet.nl"
+_KAMERNET_AUTH_REFRESH_URL = f"{_KAMERNET_API_BASE}/en"
+_KAMERNET_LISTING_REACTION_URL = f"{_KAMERNET_API_BASE}/services/api/conversation/listing-reaction"
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+_PERSISTED_AUTH_COOKIE_NAMES = {
+    "__ha_at",
+    "__ha_rt",
+    "__ha_rtp",
+    "ASP.NET_SessionId",
+    "USER_EMAIL",
+    "logonUser",
+}
 
 KAMERNET_REPLY_SENT_STATUSES = {
     "sent",
@@ -73,6 +90,14 @@ class KamernetReplySettings:
     max_per_scan: int
     expected_tenancy_duration: str
     expected_move_date: str
+    date_of_birth: str
+    expected_tenancy_duration_id: int
+    gender_id: int
+    status_id: int
+    languages_spoken_ids: tuple[int, ...]
+    has_pet: bool
+    people_moving_in: int
+    tenant_language_id: int
     headless: bool
     timeout_seconds: int
     api_reply_enabled: bool
@@ -91,6 +116,14 @@ class KamernetReplySettings:
             max_per_scan=config.KAMERNET_REPLY_MAX_PER_SCAN,
             expected_tenancy_duration=config.KAMERNET_EXPECTED_TENANCY_DURATION,
             expected_move_date=config.KAMERNET_EXPECTED_MOVE_DATE,
+            date_of_birth=config.KAMERNET_DATE_OF_BIRTH,
+            expected_tenancy_duration_id=config.KAMERNET_EXPECTED_TENANCY_DURATION_ID,
+            gender_id=config.KAMERNET_GENDER_ID,
+            status_id=config.KAMERNET_STATUS_ID,
+            languages_spoken_ids=config.KAMERNET_LANGUAGES_SPOKEN_IDS,
+            has_pet=config.KAMERNET_HAS_PET,
+            people_moving_in=config.KAMERNET_PEOPLE_MOVING_IN,
+            tenant_language_id=config.KAMERNET_TENANT_LANGUAGE_ID,
             headless=config.KAMERNET_BROWSER_HEADLESS,
             timeout_seconds=max(5, config.KAMERNET_BROWSER_TIMEOUT_SECONDS),
             api_reply_enabled=config.KAMERNET_API_REPLY_ENABLED,
@@ -176,6 +209,16 @@ class KamernetReplier:
         page = await self._context.new_page()
         page.set_default_timeout(self.settings.timeout_seconds * 1000)
         try:
+            if not self.settings.dry_run and self.settings.api_reply_enabled:
+                direct_result = await self._submit_with_direct_api(listing)
+                if direct_result.status == "sent":
+                    return direct_result
+                logger.warning(
+                    "Kamernet direct API submit failed for %s (%s); falling back to browser preparation.",
+                    listing.url,
+                    direct_result.detail,
+                )
+
             prepared = await self._prepare_reply_form(page, listing)
             if isinstance(prepared, KamernetReplyResult):
                 return prepared
@@ -204,6 +247,64 @@ class KamernetReplier:
             return KamernetReplyResult("error", str(exc))
         finally:
             await page.close()
+
+    async def _submit_with_direct_api(self, listing: Listing) -> KamernetReplyResult:
+        if not self._context:
+            return KamernetReplyResult("api_unavailable", "Kamernet browser context is not available.")
+        if not self.settings.storage_state_path.exists():
+            return KamernetReplyResult("api_unavailable", "Saved Kamernet session is missing.")
+
+        payload, payload_error = _build_direct_api_payload(listing, self.settings)
+        if payload_error:
+            return KamernetReplyResult("api_unavailable", payload_error)
+
+        try:
+            context_cookies = await self._context.cookies(["https://kamernet.nl", "https://id.kamernet.nl"])
+            async with httpx.AsyncClient(
+                timeout=self.settings.timeout_seconds,
+                follow_redirects=True,
+                headers={
+                    "User-Agent": _DEFAULT_USER_AGENT,
+                    "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
+                },
+            ) as client:
+                _copy_cookies(client, context_cookies)
+                access_token = _cookie_value(client.cookies.jar, "__ha_at")
+                if not access_token:
+                    refresh_response = await client.get(_KAMERNET_AUTH_REFRESH_URL)
+                    if refresh_response.status_code >= 400:
+                        detail = _trim_detail(refresh_response.text, self.settings)
+                        return KamernetReplyResult(
+                            "api_auth_failed",
+                            f"Kamernet auth refresh failed ({refresh_response.status_code}): {detail}",
+                        )
+                    _persist_storage_cookies(self.settings.storage_state_path, client.cookies.jar)
+                    access_token = _cookie_value(client.cookies.jar, "__ha_at")
+
+                if not access_token:
+                    return KamernetReplyResult(
+                        "api_unavailable",
+                        "Kamernet auth refresh did not return an access token.",
+                    )
+
+                response = await client.post(
+                    _KAMERNET_LISTING_REACTION_URL,
+                    headers={
+                        "accept": "application/json, text/plain, */*",
+                        "authorization": f"Bearer {access_token}",
+                        "content-type": "application/json",
+                        "origin": _KAMERNET_API_BASE,
+                        "referer": listing.url,
+                    },
+                    json=payload,
+                )
+                _persist_storage_cookies(self.settings.storage_state_path, client.cookies.jar)
+        except httpx.HTTPError as exc:
+            return KamernetReplyResult("api_error", str(exc))
+        except OSError as exc:
+            return KamernetReplyResult("api_unavailable", f"Could not read or update Kamernet session: {exc}")
+
+        return _api_response_result(response, self.settings, "direct listing-reaction API request")
 
     async def _prepare_reply_form(self, page: Page, listing: Listing) -> Locator | KamernetReplyResult:
         await page.goto(listing.url, wait_until="domcontentloaded", timeout=self.settings.timeout_seconds * 1000)
@@ -335,26 +436,7 @@ class KamernetReplier:
         except httpx.HTTPError as exc:
             return KamernetReplyResult("api_error", str(exc))
 
-        detail = _trim_detail(response.text, self.settings)
-        if 200 <= response.status_code < 300:
-            return KamernetReplyResult(
-                "sent",
-                f"Kamernet accepted the listing-reaction API request ({response.status_code}).",
-                sent_at=datetime.now(timezone.utc),
-            )
-        if response.status_code in {400, 409} and re.search(r"(already|conversation|sent)", detail, re.I):
-            return KamernetReplyResult(
-                "sent",
-                "Kamernet API says this listing already has a conversation.",
-                sent_at=datetime.now(timezone.utc),
-            )
-        if response.status_code in {401, 403}:
-            return KamernetReplyResult("api_auth_failed", f"{response.status_code}: {detail}")
-        if response.status_code == 429:
-            return KamernetReplyResult("api_rate_limited", f"429: {detail}")
-        if response.status_code == 400:
-            return KamernetReplyResult("api_validation_failed", detail)
-        return KamernetReplyResult("api_submit_failed", f"{response.status_code}: {detail}")
+        return _api_response_result(response, self.settings, "listing-reaction API request")
 
     async def _submit_with_browser_fallback(
         self,
@@ -477,6 +559,192 @@ def _copy_cookies(client: httpx.AsyncClient, cookies: list[dict]) -> None:
             continue
         domain = (cookie.get("domain") or "kamernet.nl").lstrip(".")
         client.cookies.set(name, value, domain=domain, path=cookie.get("path") or "/")
+
+
+def _api_response_result(
+    response: httpx.Response,
+    settings: KamernetReplySettings,
+    action_label: str,
+) -> KamernetReplyResult:
+    detail = _trim_detail(response.text, settings)
+    if 200 <= response.status_code < 300:
+        return KamernetReplyResult(
+            "sent",
+            f"Kamernet accepted the {action_label} ({response.status_code}).",
+            sent_at=datetime.now(timezone.utc),
+        )
+    if response.status_code in {400, 409} and re.search(r"(already|conversation|sent)", detail, re.I):
+        return KamernetReplyResult(
+            "sent",
+            "Kamernet API says this listing already has a conversation.",
+            sent_at=datetime.now(timezone.utc),
+        )
+    if response.status_code in {401, 403}:
+        return KamernetReplyResult("api_auth_failed", f"{response.status_code}: {detail}")
+    if response.status_code == 429:
+        return KamernetReplyResult("api_rate_limited", f"429: {detail}")
+    if response.status_code == 400:
+        return KamernetReplyResult("api_validation_failed", detail)
+    return KamernetReplyResult("api_submit_failed", f"{response.status_code}: {detail}")
+
+
+def _build_direct_api_payload(
+    listing: Listing,
+    settings: KamernetReplySettings,
+) -> tuple[dict | None, str]:
+    listing_id = _numeric_listing_id(listing)
+    if listing_id is None:
+        return None, "Kamernet listing id is not numeric."
+
+    duration_id = settings.expected_tenancy_duration_id or _expected_tenancy_duration_id(
+        settings.expected_tenancy_duration
+    )
+    if not duration_id:
+        return None, "KAMERNET_EXPECTED_TENANCY_DURATION_ID is missing and duration text is unknown."
+
+    date_of_birth = _kamernet_api_datetime(settings.date_of_birth, prefer_month_first=False)
+    if not date_of_birth:
+        return None, "KAMERNET_DATE_OF_BIRTH is missing or invalid."
+
+    expected_move_date = _kamernet_api_datetime(settings.expected_move_date, prefer_month_first=True)
+    if not expected_move_date:
+        return None, "KAMERNET_EXPECTED_MOVE_DATE is missing or invalid."
+
+    if not settings.gender_id:
+        return None, "KAMERNET_GENDER_ID is missing."
+    if not settings.status_id:
+        return None, "KAMERNET_STATUS_ID is missing."
+    if not settings.languages_spoken_ids:
+        return None, "KAMERNET_LANGUAGES_SPOKEN_IDS is missing."
+    if not settings.people_moving_in:
+        return None, "KAMERNET_PEOPLE_MOVING_IN is missing."
+    if not settings.tenant_language_id:
+        return None, "KAMERNET_TENANT_LANGUAGE_ID is missing."
+
+    return (
+        {
+            "listingID": listing_id,
+            "message": settings.message,
+            "genderID": settings.gender_id,
+            "dateOfBirth": date_of_birth,
+            "expectedTenancyDurationID": duration_id,
+            "statusID": settings.status_id,
+            "languagesSpokenID": list(settings.languages_spoken_ids),
+            "hasPet": settings.has_pet,
+            "expectedMoveInDate": expected_move_date,
+            "peopleMovingIn": settings.people_moving_in,
+            "tenantLanguageID": settings.tenant_language_id,
+        },
+        "",
+    )
+
+
+def _numeric_listing_id(listing: Listing) -> int | None:
+    for candidate in (listing.id, listing.url):
+        match = re.search(r"(\d{5,})", str(candidate or ""))
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _expected_tenancy_duration_id(value: str) -> int | None:
+    normalized = _normalize_text(value)
+    mapping = {
+        "less than 6 months": 1,
+        "6 months": 2,
+        "1 year": 3,
+        "2 years or more": 4,
+        "2 years": 4,
+        "more than 2 years": 4,
+    }
+    return mapping.get(normalized)
+
+
+def _kamernet_api_datetime(value: str, *, prefer_month_first: bool) -> str:
+    parsed = _parse_date(value, prefer_month_first=prefer_month_first)
+    if not parsed:
+        return ""
+    return f"{parsed.isoformat()}T20:00:00"
+
+
+def _parse_date(value: str, *, prefer_month_first: bool) -> date | None:
+    stripped = (value or "").strip()
+    if not stripped:
+        return None
+
+    slash_formats = ["%m/%d/%Y", "%d/%m/%Y"] if prefer_month_first else ["%d/%m/%Y", "%m/%d/%Y"]
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", *slash_formats):
+        try:
+            return datetime.strptime(stripped, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _cookie_value(cookie_jar, name: str) -> str:
+    for cookie in cookie_jar:
+        if cookie.name == name and "kamernet.nl" in (cookie.domain or ""):
+            return cookie.value
+    return ""
+
+
+def _persist_storage_cookies(storage_state_path: Path, cookie_jar) -> None:
+    if not storage_state_path.exists():
+        return
+
+    try:
+        state = json.loads(storage_state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Could not load Kamernet storage state for cookie persistence.", exc_info=True)
+        return
+
+    cookies = state.setdefault("cookies", [])
+    by_key = {
+        (cookie.get("domain"), cookie.get("path") or "/", cookie.get("name")): cookie
+        for cookie in cookies
+        if isinstance(cookie, dict)
+    }
+
+    changed = False
+    for jar_cookie in cookie_jar:
+        if jar_cookie.name not in _PERSISTED_AUTH_COOKIE_NAMES:
+            continue
+        domain = jar_cookie.domain or "kamernet.nl"
+        if "kamernet.nl" not in domain:
+            continue
+        key = (domain, jar_cookie.path or "/", jar_cookie.name)
+        existing = by_key.get(key)
+        cookie_data = {
+            "name": jar_cookie.name,
+            "value": jar_cookie.value,
+            "domain": domain,
+            "path": jar_cookie.path or "/",
+            "expires": jar_cookie.expires if jar_cookie.expires is not None else -1,
+            "httpOnly": bool(
+                getattr(jar_cookie, "_rest", {}).get("HttpOnly")
+                or getattr(jar_cookie, "_rest", {}).get("httponly")
+            ),
+            "secure": bool(jar_cookie.secure),
+            "sameSite": "Lax",
+        }
+        if existing:
+            cookie_data["httpOnly"] = existing.get("httpOnly", cookie_data["httpOnly"])
+            cookie_data["secure"] = existing.get("secure", cookie_data["secure"])
+            cookie_data["sameSite"] = existing.get("sameSite", cookie_data["sameSite"])
+            if existing != cookie_data:
+                existing.update(cookie_data)
+                changed = True
+        else:
+            cookies.append(cookie_data)
+            by_key[key] = cookie_data
+            changed = True
+
+    if changed:
+        mode = storage_state_path.stat().st_mode
+        temp_path = storage_state_path.with_suffix(storage_state_path.suffix + ".tmp")
+        temp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_path.replace(storage_state_path)
+        storage_state_path.chmod(mode & 0o777)
 
 
 def _trim_detail(detail: str, settings: KamernetReplySettings, limit: int = 1000) -> str:

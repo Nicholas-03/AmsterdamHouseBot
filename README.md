@@ -114,7 +114,10 @@ Kamernet auto-reply variables:
 - `KAMERNET_REPLY_MAX_PER_SCAN`: optional, defaults to `0` for no cap; set a positive number to limit replies per scan
 - `KAMERNET_EXPECTED_TENANCY_DURATION`: optional, defaults to `1 year` when Kamernet asks for planned stay
 - `KAMERNET_EXPECTED_MOVE_DATE`: optional, defaults to `07/01/2026` for July 1, 2026 when Kamernet asks for move-in date
-- `KAMERNET_API_REPLY_ENABLED`: optional, defaults to `1`; captures Kamernet's authenticated submit request in Playwright, aborts the browser send, and replays it with `httpx`; browser submit remains the fallback
+- `KAMERNET_DATE_OF_BIRTH`: required for direct Kamernet API replies; accepts `YYYY-MM-DD`, `DD-MM-YYYY`, or `DD/MM/YYYY`; defaults to `ROOFZ_BIRTH_DATE` when unset
+- `KAMERNET_EXPECTED_TENANCY_DURATION_ID`: optional override for Kamernet's internal duration id; defaults from `KAMERNET_EXPECTED_TENANCY_DURATION`
+- `KAMERNET_GENDER_ID`, `KAMERNET_STATUS_ID`, `KAMERNET_LANGUAGES_SPOKEN_IDS`, `KAMERNET_HAS_PET`, `KAMERNET_PEOPLE_MOVING_IN`, `KAMERNET_TENANT_LANGUAGE_ID`: structured profile fields used by the direct Kamernet API fallback
+- `KAMERNET_API_REPLY_ENABLED`: optional, defaults to `1`; first submits directly to Kamernet's listing-reaction API using the saved session cookies; if unavailable, captures Kamernet's authenticated submit request in Playwright and replays it with `httpx`; browser submit remains the final fallback
 - `KAMERNET_STORAGE_STATE_PATH`: optional, defaults beside `DB_PATH`; stores the Kamernet login session
 
 Funda auto-reply variables:
@@ -252,6 +255,13 @@ KAMERNET_REPLY_MESSAGE_FILE=kamernet_reply_message.txt
 KAMERNET_REPLY_MAX_PER_SCAN=0
 KAMERNET_EXPECTED_TENANCY_DURATION=1 year
 KAMERNET_EXPECTED_MOVE_DATE=07/01/2026
+KAMERNET_DATE_OF_BIRTH=DD-MM-YYYY
+KAMERNET_GENDER_ID=1
+KAMERNET_STATUS_ID=2
+KAMERNET_LANGUAGES_SPOKEN_IDS=1,2,16
+KAMERNET_HAS_PET=0
+KAMERNET_PEOPLE_MOVING_IN=1
+KAMERNET_TENANT_LANGUAGE_ID=2
 KAMERNET_API_REPLY_ENABLED=1
 ```
 

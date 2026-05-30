@@ -39,6 +39,16 @@ def _parse_csv(raw_value: str | None, default: str = "") -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
+def _parse_csv_ints(raw_value: str | None, default: str = "") -> tuple[int, ...]:
+    values: list[int] = []
+    for item in _parse_csv(raw_value, default):
+        try:
+            values.append(int(item))
+        except ValueError:
+            sys.exit(f"ERRORE: valore intero non valido: {item}")
+    return tuple(values)
+
+
 def _load_reply_message(prefix: str, fallback: str = "") -> str:
     message_file = os.getenv(f"{prefix}_REPLY_MESSAGE_FILE", "").strip()
     if message_file:
@@ -112,6 +122,17 @@ KAMERNET_REPLY_MESSAGE = _load_reply_message("KAMERNET")
 KAMERNET_REPLY_MAX_PER_SCAN = _parse_non_negative_int(os.getenv("KAMERNET_REPLY_MAX_PER_SCAN"), 0)
 KAMERNET_EXPECTED_TENANCY_DURATION = os.getenv("KAMERNET_EXPECTED_TENANCY_DURATION", "1 year").strip()
 KAMERNET_EXPECTED_MOVE_DATE = os.getenv("KAMERNET_EXPECTED_MOVE_DATE", "07/01/2026").strip()
+KAMERNET_DATE_OF_BIRTH = os.getenv("KAMERNET_DATE_OF_BIRTH", os.getenv("ROOFZ_BIRTH_DATE", "")).strip()
+KAMERNET_EXPECTED_TENANCY_DURATION_ID = _parse_non_negative_int(
+    os.getenv("KAMERNET_EXPECTED_TENANCY_DURATION_ID"),
+    0,
+)
+KAMERNET_GENDER_ID = _parse_non_negative_int(os.getenv("KAMERNET_GENDER_ID"), 1)
+KAMERNET_STATUS_ID = _parse_non_negative_int(os.getenv("KAMERNET_STATUS_ID"), 2)
+KAMERNET_LANGUAGES_SPOKEN_IDS = _parse_csv_ints(os.getenv("KAMERNET_LANGUAGES_SPOKEN_IDS"), "1,2,16")
+KAMERNET_HAS_PET = _parse_bool(os.getenv("KAMERNET_HAS_PET"), False)
+KAMERNET_PEOPLE_MOVING_IN = _parse_non_negative_int(os.getenv("KAMERNET_PEOPLE_MOVING_IN"), 1)
+KAMERNET_TENANT_LANGUAGE_ID = _parse_non_negative_int(os.getenv("KAMERNET_TENANT_LANGUAGE_ID"), 2)
 KAMERNET_BROWSER_HEADLESS = _parse_bool(os.getenv("KAMERNET_BROWSER_HEADLESS"), True)
 KAMERNET_BROWSER_TIMEOUT_SECONDS = _parse_non_negative_int(
     os.getenv("KAMERNET_BROWSER_TIMEOUT_SECONDS"),

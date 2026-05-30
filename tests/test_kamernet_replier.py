@@ -11,6 +11,8 @@ from kamernet_replier import (
     KamernetReplyResult,
     KamernetReplySettings,
     _SUCCESS_RE,
+    _build_direct_api_payload,
+    _kamernet_api_datetime,
     _normalize_text,
     should_skip_existing_reply,
 )
@@ -29,6 +31,14 @@ def _settings(**overrides) -> KamernetReplySettings:
         "max_per_scan": 1,
         "expected_tenancy_duration": "1 year",
         "expected_move_date": "07/01/2026",
+        "date_of_birth": "21-04-2003",
+        "expected_tenancy_duration_id": 0,
+        "gender_id": 1,
+        "status_id": 2,
+        "languages_spoken_ids": (1, 2, 16),
+        "has_pet": False,
+        "people_moving_in": 1,
+        "tenant_language_id": 2,
         "headless": True,
         "timeout_seconds": 10,
         "api_reply_enabled": True,
@@ -62,11 +72,8 @@ class KamernetReplySettingsTests(unittest.TestCase):
         self.assertIsNone(_settings(max_per_scan=0).ready_error())
 
     def test_ready_error_allows_google_storage_state_without_password(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            storage_state = Path(temp_dir) / "kamernet_storage_state.json"
-            storage_state.write_text("{}", encoding="utf-8")
-
-            self.assertIsNone(_settings(email="", password="", storage_state_path=storage_state).ready_error())
+        storage_state = Path(__file__)
+        self.assertIsNone(_settings(email="", password="", storage_state_path=storage_state).ready_error())
 
     def test_should_skip_only_final_or_duplicate_dry_run_results(self):
         self.assertFalse(should_skip_existing_reply(None, requested_dry_run=True))
@@ -85,6 +92,31 @@ class KamernetReplySettingsTests(unittest.TestCase):
 
     def test_success_pattern_accepts_existing_conversation_state(self):
         self.assertRegex("Continue conversation", _SUCCESS_RE)
+
+    def test_kamernet_api_datetime_uses_expected_date_order(self):
+        self.assertEqual(_kamernet_api_datetime("07/01/2026", prefer_month_first=True), "2026-07-01T20:00:00")
+        self.assertEqual(_kamernet_api_datetime("21-04-2003", prefer_month_first=False), "2003-04-21T20:00:00")
+
+    def test_build_direct_api_payload_matches_captured_shape(self):
+        payload, error = _build_direct_api_payload(_listing(), _settings())
+
+        self.assertEqual(error, "")
+        self.assertEqual(
+            payload,
+            {
+                "listingID": 2378731,
+                "message": "Hello, I am interested in this property.",
+                "genderID": 1,
+                "dateOfBirth": "2003-04-21T20:00:00",
+                "expectedTenancyDurationID": 3,
+                "statusID": 2,
+                "languagesSpokenID": [1, 2, 16],
+                "hasPet": False,
+                "expectedMoveInDate": "2026-07-01T20:00:00",
+                "peopleMovingIn": 1,
+                "tenantLanguageID": 2,
+            },
+        )
 
 
 class FakeReplier:
