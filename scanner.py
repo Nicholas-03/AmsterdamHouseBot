@@ -239,6 +239,8 @@ async def run_scan_for_user(
                     continue
                 seen_listing = await db.mark_seen(listing.source, listing.id, listing.url, listing.title, listing.price)
                 first_seen_at = seen_listing.get("scraped_at") if seen_listing else None
+                source_available_at = listing.reply_data.get("available_at")
+                reply_timing_start = source_available_at or first_seen_at
                 await db.log_event(
                     "listing_new",
                     chat_id=chat_id,
@@ -250,6 +252,7 @@ async def run_scan_for_user(
                         "price": listing.price,
                         "url": listing.url,
                         "first_seen_at": first_seen_at,
+                        "source_available_at": source_available_at,
                         "first_seen_by_bot": bool(seen_listing.get("inserted")) if seen_listing else False,
                         "student_compatibility_reason": listing.reply_data.get("student_compatibility_reason"),
                     },
@@ -268,7 +271,7 @@ async def run_scan_for_user(
                             KamernetReplyResult,
                             "Kamernet",
                             bot,
-                            first_seen_at,
+                            reply_timing_start,
                         )
                         if attempted:
                             reply_attempts[KamernetScraper.SOURCE] += 1
@@ -283,7 +286,7 @@ async def run_scan_for_user(
                             FundaReplyResult,
                             "Funda",
                             bot,
-                            first_seen_at,
+                            reply_timing_start,
                         )
                         if attempted:
                             reply_attempts[FundaScraper.SOURCE] += 1
@@ -298,7 +301,7 @@ async def run_scan_for_user(
                             RoofzReplyResult,
                             "Roofz",
                             bot,
-                            first_seen_at,
+                            reply_timing_start,
                         )
                         if attempted:
                             reply_attempts[RoofzScraper.SOURCE] += 1

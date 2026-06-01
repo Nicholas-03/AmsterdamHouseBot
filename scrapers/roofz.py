@@ -2,14 +2,26 @@ import asyncio
 import logging
 import random
 import re
+from typing import Any
 from urllib.parse import urlparse
+
+import httpx
 
 from .base import BaseScraper, Listing, parse_euro_amount, parse_first_int
 
 logger = logging.getLogger(__name__)
 
+_API_PATH = "/api/ms/listing/properties"
+_API_TIMEOUT_SECONDS = 20
+_API_PER_PAGE = 50
+_API_MAX_PAGES = 5
 _NAVIGATION_ATTEMPTS = 2
 _NAVIGATION_TIMEOUT_MS = 30000
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 class RoofzScraper(BaseScraper):
@@ -24,6 +36,125 @@ class RoofzScraper(BaseScraper):
         ]
 
     async def scrape(self) -> list[Listing]:
+        self.last_error = ""
+        api_listings = await self._scrape_api()
+        if api_listings is not None:
+            listings = [listing for listing in api_listings if self._matches_filters(listing)]
+            logger.info("Roofz API: found %d matching listings", len(listings))
+            return listings
+
+        api_error = self.last_error
+        logger.warning("Roofz API scrape failed; falling back to browser scraping: %s", api_error)
+        listings = await self._scrape_browser()
+        if self.last_error and api_error:
+            self.last_error = f"{api_error}; browser fallback failed: {self.last_error}"
+        return listings
+
+    async def _scrape_api(self) -> list[Listing] | None:
+        listings: list[Listing] = []
+        try:
+            async with httpx.AsyncClient(
+                timeout=_API_TIMEOUT_SECONDS,
+                headers={
+                    "Accept": "application/json",
+                    "Referer": f"{self.BASE_URL}/huur/woningen?filter=location:{self.city.lower()}",
+                    "User-Agent": _DEFAULT_USER_AGENT,
+                },
+                follow_redirects=True,
+            ) as client:
+                for page in range(1, _API_MAX_PAGES + 1):
+                    response = await client.get(
+                        f"{self.BASE_URL}{_API_PATH}",
+                        params=self._api_params(page),
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    rows = payload.get("data", []) if isinstance(payload, dict) else []
+                    if not isinstance(rows, list):
+                        raise ValueError("Roofz API returned an unexpected data shape.")
+
+                    for row in rows:
+                        listing = self._parse_api_item(row)
+                        if listing:
+                            listings.append(listing)
+
+                    if not rows or page >= _api_last_page(payload):
+                        break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.last_error = f"Roofz API scrape failed: {exc}"
+            return None
+
+        return _dedupe_listings(listings)
+
+    def _api_params(self, page: int) -> list[tuple[str, str]]:
+        return [
+            ("perPage", str(_API_PER_PAGE)),
+            ("page", str(page)),
+            ("sort", "stage"),
+            ("filter[stage]", "available"),
+            ("filter[stage]", "option"),
+            ("filter[location]", self.city.lower()),
+            ("filter[import_type]", "RentResident"),
+        ]
+
+    def _parse_api_item(self, item: Any) -> Listing | None:
+        if not isinstance(item, dict):
+            return None
+
+        slug = _clean_text(str(item.get("slug") or ""))
+        property_id = item.get("id")
+        if not slug or not property_id:
+            return None
+
+        address = item.get("address") if isinstance(item.get("address"), dict) else {}
+        location = _clean_text(str(address.get("location") or ""))
+        if self.city.casefold() not in f"{location} {slug}".casefold():
+            return None
+
+        title = _clean_text(str(item.get("title") or slug.replace("-", " ").title()))
+        status = item.get("status") if isinstance(item.get("status"), dict) else {}
+        status_code = _clean_text(str(status.get("code") or ""))
+        stage = _clean_text(str(item.get("stage") or ""))
+        if status_code and status_code not in {"available", "option"}:
+            return None
+        if stage and stage not in {"available", "option"}:
+            return None
+
+        handover = item.get("handover") if isinstance(item.get("handover"), dict) else {}
+        characteristic = item.get("characteristic") if isinstance(item.get("characteristic"), dict) else {}
+        layout = characteristic.get("layout") if isinstance(characteristic.get("layout"), dict) else {}
+        price_eur = _parse_int_value(handover.get("price")) or parse_euro_amount(
+            str(handover.get("price_formatted") or "")
+        )
+        size_value = _parse_int_value(characteristic.get("living_area")) or _parse_int_value(
+            characteristic.get("total_area")
+        )
+        bedrooms = _parse_int_value(layout.get("number_of_bedrooms"))
+
+        return Listing(
+            id=slug,
+            source=self.SOURCE,
+            title=title,
+            price=f"EUR {price_eur}/month" if price_eur else "Price unavailable",
+            address=_format_api_address(address, self.city),
+            url=f"{self.BASE_URL}/huur/woningen/{slug}",
+            image_url=_extract_api_image(item),
+            rooms=f"{bedrooms} bedrooms" if bedrooms else None,
+            size_m2=f"{size_value} m2" if size_value else None,
+            price_eur=price_eur,
+            bedrooms=bedrooms,
+            size_m2_value=size_value,
+            reply_data={
+                "property_id": str(property_id),
+                "stage": stage,
+                "status": status_code,
+                "available_at": _clean_text(str(item.get("created_at") or "")),
+            },
+        )
+
+    async def _scrape_browser(self) -> list[Listing]:
         self.last_error = ""
         try:
             from playwright.async_api import async_playwright
@@ -309,3 +440,67 @@ def _listing_id(href: str, title: str) -> str:
     if slug and slug not in {"woningen", "huur"}:
         return slug
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:80]
+
+
+def _api_last_page(payload: dict) -> int:
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else payload
+    return max(1, _parse_int_value(meta.get("last_page")) or 1)
+
+
+def _parse_int_value(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return parse_first_int(str(value))
+
+
+def _format_api_address(address: dict, fallback_city: str) -> str:
+    street = _clean_text(str(address.get("street") or ""))
+    house_number = _clean_text(str(address.get("house_number") or ""))
+    extension = _clean_text(str(address.get("house_number_extension") or ""))
+    location = _clean_text(str(address.get("location") or fallback_city))
+    postal_code = _clean_text(str(address.get("postal_code") or ""))
+
+    house = _clean_text(" ".join(part for part in (house_number, extension) if part))
+    line = _clean_text(" ".join(part for part in (street, house) if part))
+    suffix = ", ".join(part for part in (postal_code, location) if part)
+    if line and suffix:
+        return f"{line}, {suffix}"
+    return line or suffix or fallback_city
+
+
+def _extract_api_image(item: dict) -> str | None:
+    media = item.get("media") if isinstance(item.get("media"), dict) else {}
+    primary = media.get("primary_photo")
+    if isinstance(primary, str) and primary.startswith("http"):
+        return primary
+    photos = media.get("public_photos")
+    if isinstance(photos, list):
+        for photo in photos:
+            if isinstance(photo, str) and photo.startswith("http"):
+                return photo
+    characteristic = item.get("characteristic") if isinstance(item.get("characteristic"), dict) else {}
+    model = characteristic.get("characteristicModel") if isinstance(characteristic.get("characteristicModel"), dict) else {}
+    model_media = model.get("media") if isinstance(model.get("media"), dict) else {}
+    photos = model_media.get("public_photos")
+    if isinstance(photos, list):
+        for photo in photos:
+            if isinstance(photo, str) and photo.startswith("http"):
+                return photo
+    return None
+
+
+def _dedupe_listings(listings: list[Listing]) -> list[Listing]:
+    seen: set[str] = set()
+    deduped: list[Listing] = []
+    for listing in listings:
+        if listing.id in seen:
+            continue
+        seen.add(listing.id)
+        deduped.append(listing)
+    return deduped

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
@@ -22,8 +22,9 @@ from funda_replier import FundaReplySettings
 from kamernet_replier import KamernetReplySettings
 from notification_sources import ALL_SOURCES, SOURCE_LABELS, format_sources, normalize_sources, parse_source_tokens
 from roofz_mailbox_monitor import find_new_complete_application_emails
-from roofz_replier import RoofzReplySettings
+from roofz_replier import RoofzReplier, RoofzReplySettings
 from scanner import run_scan_for_user
+from scrapers.base import Listing
 from scrapers.kamernet import (
     KAMERNET_PROPERTY_TYPE_LABELS,
     format_kamernet_property_types,
@@ -134,6 +135,16 @@ def create_application() -> Application:
             roofz_complete_application_watchdog,
             interval=config.ROOFZ_COMPLETE_APPLICATION_MONITOR_INTERVAL_SECONDS,
             first=90,
+            job_kwargs={"coalesce": True, "max_instances": 1},
+        )
+    if (
+        config.ROOFZ_PREAPPLICATION_MONITOR_ENABLED
+        and config.ROOFZ_PREAPPLICATION_MONITOR_INTERVAL_SECONDS
+    ):
+        app.job_queue.run_repeating(
+            roofz_preapplication_watchdog,
+            interval=config.ROOFZ_PREAPPLICATION_MONITOR_INTERVAL_SECONDS,
+            first=60,
             job_kwargs={"coalesce": True, "max_instances": 1},
         )
 
@@ -351,6 +362,106 @@ async def roofz_complete_application_watchdog(context: ContextTypes.DEFAULT_TYPE
             status="sent",
             data={"notified_users": notified_users},
         )
+
+
+async def roofz_preapplication_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not config.ROOFZ_PREAPPLICATION_MONITOR_ENABLED:
+        return
+
+    settings = RoofzReplySettings.from_config()
+    ready_error = settings.ready_error()
+    if ready_error:
+        await db.log_event(
+            "roofz_preapplication_monitor_skipped",
+            level="warning",
+            source="roofz",
+            status="not_ready",
+            detail=ready_error,
+        )
+        return
+
+    pending = await db.get_auto_replies_by_status(
+        "roofz",
+        ("sent_preapplication_pending",),
+        limit=20,
+    )
+    if not pending:
+        return
+
+    users = [
+        user
+        for user in await _get_active_allowed_users()
+        if "roofz" in normalize_sources(user.get("enabled_sources"))
+    ]
+
+    async with RoofzReplier(settings) as replier:
+        for row in pending:
+            listing = _listing_from_auto_reply_row(row)
+            since = (
+                _parse_event_timestamp(row.get("sent_at"))
+                or _parse_event_timestamp(row.get("attempted_at"))
+                or datetime.now(timezone.utc) - timedelta(hours=2)
+            )
+            initial_sent_at = _parse_event_timestamp(row.get("sent_at"))
+            result = await replier.complete_pending_preapplication(
+                listing,
+                since,
+                initial_sent_at,
+                poll_seconds=0,
+            )
+            if result.status == "sent_preapplication_pending":
+                continue
+
+            await db.mark_auto_reply_result(
+                listing.source,
+                listing.id,
+                listing.url,
+                int(row.get("triggered_by_chat_id") or 0),
+                result.status,
+                settings.dry_run,
+                result.detail,
+                first_seen_at=row.get("first_seen_at"),
+                sent_at=result.sent_at or row.get("sent_at"),
+                confirmation_at=result.confirmation_at,
+            )
+            await db.log_event(
+                "roofz_preapplication_monitor_result",
+                level="info" if _auto_reply_status_ok(result.status) else "warning",
+                chat_id=row.get("triggered_by_chat_id"),
+                source=listing.source,
+                listing_id=listing.id,
+                title=listing.title,
+                status=result.status,
+                detail=result.detail,
+            )
+            if _auto_reply_status_ok(result.status):
+                continue
+
+            text = (
+                f"Warning: Roofz pre-application needs attention for {listing.title}.\n"
+                f"Status: {result.status}\n"
+                f"Detail: {result.detail}\n"
+                f"Listing: {listing.url}"
+            )
+            for user in users:
+                await context.bot.send_message(
+                    chat_id=user["chat_id"],
+                    text=text,
+                    disable_web_page_preview=True,
+                )
+
+
+def _listing_from_auto_reply_row(row: dict) -> Listing:
+    title = row.get("seen_title") or row.get("listing_id") or "Roofz listing"
+    url = row.get("listing_url") or row.get("url") or ""
+    return Listing(
+        id=row["listing_id"],
+        source="roofz",
+        title=title,
+        price=row.get("seen_price") or "Price unavailable",
+        address="Amsterdam",
+        url=url,
+    )
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1276,6 +1387,16 @@ def _source_sort_key(source: str) -> tuple[int, str]:
         return (ALL_SOURCES.index(source), source)
     except ValueError:
         return (len(ALL_SOURCES), source)
+
+
+def _auto_reply_status_ok(status: str) -> bool:
+    return status in {
+        "dry_run_ready",
+        "sent",
+        "confirmation_confirmed",
+        "preapplication_confirmed",
+        "preapplication_sent",
+    }
 
 
 def _event_age_seconds(event: dict | None) -> float | None:

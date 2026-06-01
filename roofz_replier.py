@@ -174,6 +174,22 @@ class RoofzReplier:
 
         return await self._complete_preapplication_from_mailtm(listing, started_at, response_result.sent_at)
 
+    async def complete_pending_preapplication(
+        self,
+        listing: Listing,
+        since: datetime,
+        initial_sent_at: datetime | None = None,
+        *,
+        poll_seconds: int = 0,
+    ) -> RoofzReplyResult:
+        return await self._complete_preapplication_from_mailtm(
+            listing,
+            since,
+            initial_sent_at,
+            poll_seconds=poll_seconds,
+            unread_only=False,
+        )
+
     async def _send_initial_interest(self, listing: Listing, payload: dict) -> RoofzReplyResult:
         headers = {
             "Accept": "application/json",
@@ -212,9 +228,14 @@ class RoofzReplier:
         listing: Listing,
         started_at: datetime,
         initial_sent_at: datetime | None,
+        *,
+        poll_seconds: int | None = None,
+        unread_only: bool = False,
     ) -> RoofzReplyResult:
-        deadline = time.monotonic() + self.settings.preapplication_poll_seconds
-        last_detail = "No matching unread Roofz pre-application email arrived yet."
+        deadline = time.monotonic() + (
+            self.settings.preapplication_poll_seconds if poll_seconds is None else max(0, poll_seconds)
+        )
+        last_detail = "No matching Roofz pre-application email arrived yet."
         mailbox_settings = self._mailbox_settings()
         with self._open_mailbox_client() as mailbox:
             while True:
@@ -224,7 +245,7 @@ class RoofzReplier:
                     mailbox_settings,
                     listing.title,
                     started_at,
-                    True,
+                    unread_only,
                 )
                 if messages:
                     confirmation_started_at = datetime.now(timezone.utc)

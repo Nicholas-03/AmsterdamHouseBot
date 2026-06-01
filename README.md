@@ -95,6 +95,9 @@ Environment variables:
 - `DAILY_SUMMARY_HOUR` and `DAILY_SUMMARY_MINUTE`: optional, default to `09:00` in `LOCAL_TIMEZONE`.
 - `SOURCE_FAILURE_COOLDOWN_THRESHOLD`: optional, defaults to `2`; consecutive failures before a source is temporarily skipped.
 - `SOURCE_FAILURE_COOLDOWN_MINUTES`: optional, defaults to `15`.
+- `ROOFZ_FAILURE_COOLDOWN_THRESHOLD`: optional, defaults to `5`; Roofz-specific cooldown threshold.
+- `ROOFZ_FAILURE_COOLDOWN_MINUTES`: optional, defaults to `1`; Roofz avoids long blind spots because its listings are first-come-first-served.
+- `AUTO_REPLY_QUEUE_WORKERS`: optional, defaults to `4`; parallel auto-reply workers so slow mailbox waits do not block other initial replies.
 - `PARARIUS_STUDENT_COMPATIBILITY_FILTER_ENABLED`: optional, defaults to `1`; when enabled, Pararius detail pages must look student/guarantor-compatible and must not explicitly reject students or guarantors.
 - `HUURWONINGEN_STUDENT_COMPATIBILITY_FILTER_ENABLED`: optional, defaults to `1`; same compatibility filter for Huurwoningen detail pages.
 - `HOUSING_EMAIL`: optional shared contact email for Funda/Roofz; useful when using a permanent mailbox on your own domain.
@@ -157,6 +160,8 @@ Roofz auto-reply variables:
 - `ROOFZ_MAILTM_FORWARDER_ADDRESS`: optional, defaults to `ROOFZ_EMAIL`; for Cloudflare this should normally match the mailbox address used in `ROOFZ_EMAIL`
 - `ROOFZ_PREAPPLICATION_ENABLED`: optional, set to `1` to poll the configured mailbox for Roofz pre-application links, complete the OSRE form, and check for a confirmation email after the first contact request
 - `ROOFZ_PREAPPLICATION_POLL_SECONDS`: optional, defaults to `420`; wait time for delayed Roofz pre-application and confirmation emails
+- `ROOFZ_PREAPPLICATION_MONITOR_ENABLED`: optional, defaults to `ROOFZ_PREAPPLICATION_ENABLED`; keeps checking pending Roofz pre-application replies after the initial poll window
+- `ROOFZ_PREAPPLICATION_MONITOR_INTERVAL_SECONDS`: optional, defaults to `45`
 - `ROOFZ_PREAPPLICATION_API_ENABLED`: optional, defaults to `1`; resolves OSRE email links and submits the pre-application through the OSRE API before falling back to browser automation
 - `ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED`: optional, defaults to `ROOFZ_PREAPPLICATION_ENABLED`; watches the configured mailbox for later Roofz "Complete application" emails and forwards the link to Telegram
 - `ROOFZ_COMPLETE_APPLICATION_MONITOR_INTERVAL_SECONDS`: optional, defaults to `300`
@@ -219,15 +224,15 @@ After that, the scheduled scanner will keep running in the background while the 
 1. `main.py` starts the Telegram application.
 2. `bot.py` registers commands, schedules the full scan, optional fast scan, health watchdog, and daily summary.
 3. `scanner.py` runs the enabled scrapers for each active user. Pararius and Huurwoningen detail pages are filtered for student/guarantor compatibility by default.
-4. `auto_reply_queue.py` runs Kamernet/Funda/Roofz replies in the background so slow replies do not block listing discovery.
+4. `auto_reply_queue.py` runs Kamernet/Funda/Roofz replies in parallel background workers so slow confirmations do not block other initial replies.
 5. `source_health.py` tracks consecutive source failures and temporarily cools down noisy sources.
 6. `db.py` stores filters, deduplicates listings, records operational events, and prunes event rows older than 3 days.
 
 ## Auto-Reply
 
-Auto-reply needs both server setup and a Telegram toggle. Each source has its own server-side flag, and the user must send `/autoreply on`. When enabled, it only runs after a new listing has already matched your filters and the Telegram notification has been sent. Replies are queued in-process and handled by a background worker so slow confirmations or browser/API fallbacks do not block the next scraper. It records attempts in SQLite so the same listing is not answered twice, even if multiple Telegram users match it.
+Auto-reply needs both server setup and a Telegram toggle. Each source has its own server-side flag, and the user must send `/autoreply on`. When enabled, it only runs after a new listing has already matched your filters and the Telegram notification has been sent. Replies are queued in-process and handled by parallel background workers so slow confirmations or browser/API fallbacks do not block the next scraper or another initial reply. It records attempts in SQLite so the same listing is not answered twice, even if multiple Telegram users match it.
 
-Operational event logging writes scan starts/finishes, fast-scan activity, scraper results, source cooldowns, new listings, notification sends, auto-reply queue events, auto-reply decisions, auto-reply results, daily summaries, and Telegram warnings into the `bot_events` table. Auto-reply rows also store `first_seen_at`, `sent_at`, `reply_latency_seconds`, `confirmation_at`, and `confirmation_latency_seconds` in `auto_replies`, measuring from the first time the bot saw the listing. Funda and Roofz populate confirmation timing when the forwarded email arrives; Kamernet normally has no confirmation email, so only reply latency is recorded. Pararius/Huurwoningen student-compatibility decisions are logged in process logs, and accepted listings carry the reason in the structured `listing_new` event. Use `/status` for the current operational view, `/logs` for recent raw events, or inspect SQLite directly on the VPS. Event rows older than 3 days are pruned on startup and scheduled scans.
+Operational event logging writes scan starts/finishes, fast-scan activity, scraper results, source cooldowns, new listings, notification sends, auto-reply queue events, auto-reply decisions, auto-reply results, daily summaries, and Telegram warnings into the `bot_events` table. Auto-reply rows also store `first_seen_at`, `sent_at`, `reply_latency_seconds`, `confirmation_at`, and `confirmation_latency_seconds` in `auto_replies`. Roofz API listings include the upstream `created_at` timestamp, so Roofz reply latency is measured from when Roofz exposed the property, not only from when the bot first saw it. Funda and Roofz populate confirmation timing when the forwarded email arrives; Kamernet normally has no confirmation email, so only reply latency is recorded. Pararius/Huurwoningen student-compatibility decisions are logged in process logs, and accepted listings carry the reason in the structured `listing_new` event. Use `/status` for the current operational view, `/logs` for recent raw events, or inspect SQLite directly on the VPS. Event rows older than 3 days are pruned on startup and scheduled scans.
 
 Keep tokens, passwords, personal form data, and reply messages in `.env`. Do not commit real `.env` files, saved browser sessions, local databases, or reply-message text files. For VPS deployment, prefer inline `KAMERNET_REPLY_MESSAGE`, `FUNDA_REPLY_MESSAGE`, and `ROOFZ_REPLY_MESSAGE` values in `.env`; local `*_REPLY_MESSAGE_FILE` paths are not uploaded by the deploy script.
 
@@ -328,7 +333,7 @@ Roofz replies use the same contact API used by the listing page. Run a one-listi
 python scripts/test_roofz_reply.py --url "https://www.roofz.eu/huur/woningen/jan-van-galenstraat-502"
 ```
 
-To allow a live Roofz send, set `ROOFZ_REPLY_DRY_RUN=0` and pass `--live` for one listing. The contact request should use your normal Roofz email in `ROOFZ_EMAIL`. Roofz pre-applications read follow-up emails from the configured mailbox, resolve the OSRE application link, submit the OSRE API payload, and then wait for a confirmation email. If the OSRE API changes or rejects the request, the bot falls back to the browser form filler. Configure the mailbox and the required OSRE answers:
+Roofz discovery uses Roofz's JSON listing API first and keeps browser scraping only as a fallback. To allow a live Roofz send, set `ROOFZ_REPLY_DRY_RUN=0` and pass `--live` for one listing. The contact request should use your normal Roofz email in `ROOFZ_EMAIL`. Roofz pre-applications read follow-up emails from the configured mailbox, resolve the OSRE application link, submit the OSRE API payload, and then wait for a confirmation email. A watchdog keeps checking pending pre-applications after the initial wait window. If the OSRE API changes or rejects the request, the bot falls back to the browser form filler. Configure the mailbox and the required OSRE answers:
 
 ```env
 HOUSING_EMAIL=housing@example.com

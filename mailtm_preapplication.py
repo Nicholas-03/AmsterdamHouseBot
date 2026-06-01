@@ -289,7 +289,7 @@ def _find_messages(
             continue
         if subject_patterns and not any(pattern.casefold() in subject.casefold() for pattern in subject_patterns):
             continue
-        if listing_title and listing_title.casefold() not in subject.casefold():
+        if listing_title and not _subject_matches_listing(subject, listing_title):
             continue
 
         full = client.get_message(summary["id"])
@@ -358,6 +358,23 @@ def _clean_link(href: str) -> str:
 
 def mailtm_senders(*values: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+
+def _subject_matches_listing(subject: str, listing_title: str) -> bool:
+    subject_key = _listing_match_key(subject)
+    title_key = _listing_match_key(listing_title)
+    if not title_key:
+        return True
+    if title_key in subject_key:
+        return True
+
+    title_tokens = title_key.split()
+    subject_tokens = set(subject_key.split())
+    return all(token in subject_tokens for token in title_tokens)
+
+
+def _listing_match_key(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.casefold())).strip()
 
 
 def _looks_like_preapplication_link(text: str, href: str) -> bool:

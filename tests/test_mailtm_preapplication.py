@@ -203,6 +203,33 @@ class MailTmPreApplicationTests(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0].sender, "tenant@gmail.example")
 
+    def test_find_preapplication_matches_hyphenated_unit_when_title_uses_spaces(self):
+        client = FakeMailTmClient(
+            [
+                {
+                    "id": "1",
+                    "subject": "Start your pre-application for Spaklerweg 14 C-10, Amsterdam.",
+                    "from": {"address": "living@rockfieldrealestate.com"},
+                    "seen": True,
+                    "createdAt": "2026-06-01T15:25:00+00:00",
+                },
+            ],
+            {
+                "1": {"html": ['<a href="https://tracking.osre.nl/ls/click">Start pre-application</a>']},
+            },
+        )
+
+        messages = find_preapplication_messages(
+            client,
+            _settings(),
+            listing_title="Spaklerweg 14 C 10",
+            since=datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc),
+            unread_only=False,
+        )
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].message_id, "1")
+
     def test_confirmation_does_not_match_start_preapplication_subject(self):
         client = FakeMailTmClient(
             [

@@ -711,6 +711,37 @@ async def get_auto_reply(source: str, listing_id: str) -> dict | None:
             }
 
 
+async def get_auto_replies_by_status(
+    source: str,
+    statuses: tuple[str, ...],
+    *,
+    limit: int = 20,
+) -> list[dict]:
+    if not statuses:
+        return []
+    placeholders = ",".join("?" for _ in statuses)
+    query = f"""
+        SELECT
+            auto_replies.*,
+            seen_listings.title AS seen_title,
+            seen_listings.price AS seen_price,
+            COALESCE(seen_listings.url, auto_replies.url) AS listing_url
+        FROM auto_replies
+        LEFT JOIN seen_listings
+          ON seen_listings.source = auto_replies.source
+         AND seen_listings.listing_id = auto_replies.listing_id
+        WHERE auto_replies.source = ?
+          AND auto_replies.status IN ({placeholders})
+        ORDER BY auto_replies.updated_at ASC
+        LIMIT ?
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(query, (source, *statuses, limit)) as cur:
+            rows = await cur.fetchall()
+    return [dict(row) for row in rows]
+
+
 async def mark_auto_reply_result(
     source: str,
     listing_id: str,

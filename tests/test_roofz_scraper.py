@@ -5,6 +5,41 @@ from scrapers.roofz import RoofzScraper
 
 
 class RoofzScraperTests(unittest.TestCase):
+    def test_parse_api_item_keeps_property_id_and_available_at(self):
+        listing = RoofzScraper(city="Amsterdam")._parse_api_item(
+            {
+                "id": 12580611,
+                "slug": "spaklerweg-14-c-10",
+                "title": "Spaklerweg 14 C-10",
+                "stage": "available",
+                "created_at": "2026-06-01T15:13:09.000000Z",
+                "status": {"code": "available"},
+                "handover": {"price": 1298},
+                "address": {
+                    "street": "Spaklerweg",
+                    "house_number": "14",
+                    "house_number_extension": "C-10",
+                    "postal_code": "1096 BA",
+                    "location": "Amsterdam",
+                },
+                "characteristic": {
+                    "living_area": 32,
+                    "layout": {"number_of_bedrooms": 1},
+                },
+                "media": {"primary_photo": "https://cdn.example/spaklerweg.webp"},
+            }
+        )
+
+        self.assertIsNotNone(listing)
+        self.assertEqual(listing.id, "spaklerweg-14-c-10")
+        self.assertEqual(listing.title, "Spaklerweg 14 C-10")
+        self.assertEqual(listing.price_eur, 1298)
+        self.assertEqual(listing.size_m2_value, 32)
+        self.assertEqual(listing.bedrooms, 1)
+        self.assertEqual(listing.address, "Spaklerweg 14 C-10, 1096 BA, Amsterdam")
+        self.assertEqual(listing.reply_data["property_id"], "12580611")
+        self.assertEqual(listing.reply_data["available_at"], "2026-06-01T15:13:09.000000Z")
+
     def test_parse_row_keeps_property_id_for_replies(self):
         listing = RoofzScraper(city="Amsterdam")._parse_row(
             {

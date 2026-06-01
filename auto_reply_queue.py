@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import config
 import db
 
 logger = logging.getLogger(__name__)
@@ -26,9 +27,9 @@ class AutoReplyJob:
 class AutoReplyQueue:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[AutoReplyJob] = asyncio.Queue()
-        self._worker_task: asyncio.Task | None = None
+        self._worker_tasks: list[asyncio.Task] = []
         self._pending_keys: set[tuple[str, str]] = set()
-        self._current_job: AutoReplyJob | None = None
+        self._current_jobs: dict[str, AutoReplyJob] = {}
         self.enqueued_count = 0
         self.completed_count = 0
         self.skipped_count = 0
@@ -36,19 +37,23 @@ class AutoReplyQueue:
         self.last_error = ""
 
     def start(self) -> None:
-        if self._worker_task and not self._worker_task.done():
+        self._worker_tasks = [task for task in self._worker_tasks if not task.done()]
+        target_count = max(1, config.AUTO_REPLY_QUEUE_WORKERS)
+        if len(self._worker_tasks) >= target_count:
             return
-        self._worker_task = asyncio.create_task(self._worker(), name="auto-reply-worker")
-        logger.info("Auto-reply queue worker started.")
+        for index in range(len(self._worker_tasks), target_count):
+            worker_name = f"auto-reply-worker-{index + 1}"
+            self._worker_tasks.append(asyncio.create_task(self._worker(worker_name), name=worker_name))
+        logger.info("Auto-reply queue workers running: %d.", len(self._worker_tasks))
 
     async def stop(self) -> None:
-        if not self._worker_task or self._worker_task.done():
+        if not self._worker_tasks:
             return
-        self._worker_task.cancel()
-        try:
-            await self._worker_task
-        except asyncio.CancelledError:
-            pass
+        for task in self._worker_tasks:
+            task.cancel()
+        await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+        self._worker_tasks = []
+        self._current_jobs.clear()
 
     async def enqueue(self, job: AutoReplyJob) -> bool:
         self.start()
@@ -77,18 +82,22 @@ class AutoReplyQueue:
         return True
 
     def snapshot(self) -> dict:
-        current = None
-        if self._current_job:
-            current = {
-                "source": self._current_job.source,
-                "listing_id": self._current_job.listing_id,
-                "title": self._current_job.title,
-                "age_seconds": _elapsed_seconds(self._current_job.enqueued_at),
+        running_jobs = [
+            {
+                "worker": worker_name,
+                "source": job.source,
+                "listing_id": job.listing_id,
+                "title": job.title,
+                "age_seconds": _elapsed_seconds(job.enqueued_at),
             }
+            for worker_name, job in sorted(self._current_jobs.items())
+        ]
         return {
             "queued": self._queue.qsize(),
-            "running": self._current_job is not None,
-            "current": current,
+            "running": bool(running_jobs),
+            "current": running_jobs[0] if running_jobs else None,
+            "running_jobs": running_jobs,
+            "workers": len(self._worker_tasks),
             "enqueued": self.enqueued_count,
             "completed": self.completed_count,
             "skipped": self.skipped_count,
@@ -96,10 +105,10 @@ class AutoReplyQueue:
             "last_error": self.last_error,
         }
 
-    async def _worker(self) -> None:
+    async def _worker(self, worker_name: str) -> None:
         while True:
             job = await self._queue.get()
-            self._current_job = job
+            self._current_jobs[worker_name] = job
             try:
                 await db.log_event(
                     "auto_reply_worker_started",
@@ -108,7 +117,7 @@ class AutoReplyQueue:
                     listing_id=job.listing_id,
                     title=job.title,
                     status="started",
-                    data={"queue_age_seconds": _elapsed_seconds(job.enqueued_at)},
+                    data={"queue_age_seconds": _elapsed_seconds(job.enqueued_at), "worker": worker_name},
                 )
                 attempted = await job.runner()
                 if attempted:
@@ -122,7 +131,7 @@ class AutoReplyQueue:
                     listing_id=job.listing_id,
                     title=job.title,
                     status="finished" if attempted else "skipped",
-                    data={"queue_age_seconds": _elapsed_seconds(job.enqueued_at)},
+                    data={"queue_age_seconds": _elapsed_seconds(job.enqueued_at), "worker": worker_name},
                 )
             except asyncio.CancelledError:
                 raise
@@ -139,11 +148,11 @@ class AutoReplyQueue:
                     title=job.title,
                     status="error",
                     detail=str(exc),
-                    data={"queue_age_seconds": _elapsed_seconds(job.enqueued_at)},
+                    data={"queue_age_seconds": _elapsed_seconds(job.enqueued_at), "worker": worker_name},
                 )
             finally:
                 self._pending_keys.discard(job.key)
-                self._current_job = None
+                self._current_jobs.pop(worker_name, None)
                 self._queue.task_done()
 
 

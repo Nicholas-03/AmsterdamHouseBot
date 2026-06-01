@@ -49,8 +49,7 @@ class SourceHealthRegistry:
         state.last_failure_at = _now()
         state.last_error = detail or status
 
-        threshold = config.SOURCE_FAILURE_COOLDOWN_THRESHOLD
-        cooldown_minutes = config.SOURCE_FAILURE_COOLDOWN_MINUTES
+        threshold, cooldown_minutes = _cooldown_policy(source)
         if not threshold or not cooldown_minutes or state.failures < threshold:
             return
 
@@ -97,6 +96,12 @@ def _format_timestamp(value: datetime | None) -> str | None:
     if value is None:
         return None
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _cooldown_policy(source: str) -> tuple[int, int]:
+    if source == "roofz":
+        return config.ROOFZ_FAILURE_COOLDOWN_THRESHOLD, config.ROOFZ_FAILURE_COOLDOWN_MINUTES
+    return config.SOURCE_FAILURE_COOLDOWN_THRESHOLD, config.SOURCE_FAILURE_COOLDOWN_MINUTES
 
 
 SOURCE_HEALTH = SourceHealthRegistry()
