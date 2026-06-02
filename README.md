@@ -160,6 +160,8 @@ Roofz auto-reply variables:
 - `ROOFZ_MAILTM_FORWARDER_ADDRESS`: optional, defaults to `ROOFZ_EMAIL`; for Cloudflare this should normally match the mailbox address used in `ROOFZ_EMAIL`
 - `ROOFZ_PREAPPLICATION_ENABLED`: optional, set to `1` to poll the configured mailbox for Roofz pre-application links, complete the OSRE form, and check for a confirmation email after the first contact request
 - `ROOFZ_PREAPPLICATION_POLL_SECONDS`: optional, defaults to `420`; wait time for delayed Roofz pre-application and confirmation emails
+- `ROOFZ_PREAPPLICATION_INITIAL_CONTACT_RETRIES`: optional, defaults to `1`; retries the initial Roofz contact request when Roofz accepts it but no pre-application email arrives
+- `ROOFZ_PREAPPLICATION_RETRY_POLL_SECONDS`: optional, defaults to `180`; mailbox wait time after a retried initial Roofz contact request
 - `ROOFZ_PREAPPLICATION_MONITOR_ENABLED`: optional, defaults to `ROOFZ_PREAPPLICATION_ENABLED`; keeps checking pending Roofz pre-application replies after the initial poll window
 - `ROOFZ_PREAPPLICATION_MONITOR_INTERVAL_SECONDS`: optional, defaults to `45`
 - `ROOFZ_PREAPPLICATION_API_ENABLED`: optional, defaults to `1`; resolves OSRE email links and submits the pre-application through the OSRE API before falling back to browser automation

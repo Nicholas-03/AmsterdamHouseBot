@@ -40,6 +40,8 @@ class RoofzReplySettings:
     preapplication_api_enabled: bool
     preapplication_poll_seconds: int
     preapplication_poll_interval_seconds: int
+    preapplication_initial_contact_retries: int
+    preapplication_retry_poll_seconds: int
     preapplication_api_url: str
     preapplication_availability_api_base: str
     mailbox_provider: str
@@ -83,6 +85,8 @@ class RoofzReplySettings:
             preapplication_api_enabled=config.ROOFZ_PREAPPLICATION_API_ENABLED,
             preapplication_poll_seconds=config.ROOFZ_PREAPPLICATION_POLL_SECONDS,
             preapplication_poll_interval_seconds=max(1, config.ROOFZ_PREAPPLICATION_POLL_INTERVAL_SECONDS),
+            preapplication_initial_contact_retries=config.ROOFZ_PREAPPLICATION_INITIAL_CONTACT_RETRIES,
+            preapplication_retry_poll_seconds=config.ROOFZ_PREAPPLICATION_RETRY_POLL_SECONDS,
             preapplication_api_url=config.ROOFZ_OSRE_PREAPPLICATION_API_URL,
             preapplication_availability_api_base=config.ROOFZ_OSRE_AVAILABILITY_API_BASE,
             mailbox_provider=config.ROOFZ_MAILBOX_PROVIDER,
@@ -172,7 +176,29 @@ class RoofzReplier:
         if not self.settings.preapplication_enabled:
             return response_result
 
-        return await self._complete_preapplication_from_mailtm(listing, started_at, response_result.sent_at)
+        first_sent_at = response_result.sent_at
+        result = await self._complete_preapplication_from_mailtm(listing, started_at, first_sent_at)
+        for retry_index in range(self.settings.preapplication_initial_contact_retries):
+            if result.status != "sent_preapplication_pending":
+                return result
+            retry_result = await self._send_initial_interest(listing, payload)
+            if retry_result.status != "sent":
+                return RoofzReplyResult(
+                    result.status,
+                    (
+                        f"{result.detail} Retried initial contact {retry_index + 1} time(s), "
+                        f"but retry failed with {retry_result.status}: {retry_result.detail}"
+                    ),
+                    sent_at=first_sent_at,
+                )
+            retry_started_at = retry_result.sent_at or datetime.now(timezone.utc)
+            result = await self._complete_preapplication_from_mailtm(
+                listing,
+                retry_started_at,
+                first_sent_at,
+                poll_seconds=self.settings.preapplication_retry_poll_seconds,
+            )
+        return result
 
     async def complete_pending_preapplication(
         self,

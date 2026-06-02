@@ -34,6 +34,8 @@ def _settings(**overrides) -> RoofzReplySettings:
         "preapplication_api_enabled": True,
         "preapplication_poll_seconds": 1,
         "preapplication_poll_interval_seconds": 1,
+        "preapplication_initial_contact_retries": 1,
+        "preapplication_retry_poll_seconds": 1,
         "preapplication_api_url": "https://relet.portal.prd.osre.eu/portal/applications/pre-application",
         "preapplication_availability_api_base": (
             "https://financial-check.portal.prd.osre.eu/portal/financial-check/check-availability"
@@ -198,6 +200,64 @@ class RoofzReplierTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, ["bad-link", "good-link"])
         self.assertEqual(result.status, "preapplication_sent")
+
+    async def test_missing_preapplication_email_retries_initial_contact_once(self):
+        from datetime import datetime, timezone
+
+        first_sent_at = datetime(2026, 6, 2, 13, 8, 16, tzinfo=timezone.utc)
+        retry_sent_at = datetime(2026, 6, 2, 13, 15, 19, tzinfo=timezone.utc)
+        confirmation_at = datetime(2026, 6, 2, 13, 16, 1, tzinfo=timezone.utc)
+
+        async with RoofzReplier(
+            _settings(
+                dry_run=False,
+                preapplication_enabled=True,
+                preapplication_initial_contact_retries=1,
+                preapplication_retry_poll_seconds=123,
+            )
+        ) as replier:
+            send_calls = []
+            complete_calls = []
+
+            async def fake_send(listing, payload):
+                send_calls.append((listing.id, payload["subscription"]["property_id"]))
+                sent_at = first_sent_at if len(send_calls) == 1 else retry_sent_at
+                return RoofzReplyResult("sent", "accepted", sent_at=sent_at)
+
+            async def fake_complete(listing, started_at, initial_sent_at, *, poll_seconds=None, unread_only=False):
+                complete_calls.append(
+                    {
+                        "started_at": started_at,
+                        "initial_sent_at": initial_sent_at,
+                        "poll_seconds": poll_seconds,
+                    }
+                )
+                if len(complete_calls) == 1:
+                    return RoofzReplyResult(
+                        "sent_preapplication_pending",
+                        "No matching Roofz pre-application email arrived yet.",
+                        sent_at=initial_sent_at,
+                    )
+                return RoofzReplyResult(
+                    "preapplication_confirmed",
+                    "Roofz confirmation email arrived.",
+                    sent_at=initial_sent_at,
+                    confirmation_at=confirmation_at,
+                )
+
+            replier._send_initial_interest = fake_send
+            replier._complete_preapplication_from_mailtm = fake_complete
+
+            result = await replier.reply_to_listing(_listing())
+
+        self.assertEqual(len(send_calls), 2)
+        self.assertEqual(result.status, "preapplication_confirmed")
+        self.assertEqual(result.sent_at, first_sent_at)
+        self.assertEqual(result.confirmation_at, confirmation_at)
+        self.assertIsNone(complete_calls[0]["poll_seconds"])
+        self.assertEqual(complete_calls[1]["started_at"], retry_sent_at)
+        self.assertEqual(complete_calls[1]["initial_sent_at"], first_sent_at)
+        self.assertEqual(complete_calls[1]["poll_seconds"], 123)
 
 
 if __name__ == "__main__":
