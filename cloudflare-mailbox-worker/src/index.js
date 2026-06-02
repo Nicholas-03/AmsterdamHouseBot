@@ -20,6 +20,10 @@ export default {
       return listMessages(env, url);
     }
 
+    if (request.method === "POST" && url.pathname === "/messages/rebuild-index") {
+      return rebuildMessageIndex(env);
+    }
+
     const messageMatch = url.pathname.match(/^\/messages\/([^/]+)$/);
     if (request.method === "GET" && messageMatch) {
       return getMessage(env, messageMatch[1]);
@@ -66,6 +70,35 @@ async function listMessages(env, url) {
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
     .slice(0, limit);
   return json({ messages });
+}
+
+async function rebuildMessageIndex(env) {
+  let listed;
+  try {
+    listed = await env.MAILBOX.list({ prefix: MESSAGE_PREFIX, limit: 1000 });
+  } catch (error) {
+    return json(
+      {
+        error: "kv_list_failed",
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      503
+    );
+  }
+
+  const results = await Promise.all(listed.keys.map((key) => readSummaryForKey(env, key)));
+  const skipped = results.filter((result) => result.skipped).length;
+  const messages = results
+    .map((result) => result.summary)
+    .filter((summary) => summary)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .slice(0, indexLimit(env));
+
+  await env.MAILBOX.put(
+    MESSAGE_INDEX_KEY,
+    JSON.stringify({ updatedAt: new Date().toISOString(), messages })
+  );
+  return json({ ok: true, indexed: messages.length, skipped });
 }
 
 async function getMessage(env, id) {
@@ -193,6 +226,29 @@ async function readMessageIndex(env) {
     return pruneExpiredSummaries(env, rawMessages.map(summaryFor).filter((summary) => summary));
   } catch {
     return [];
+  }
+}
+
+async function readSummaryForKey(env, key) {
+  try {
+    const fallbackId = String(key.name || "").startsWith(MESSAGE_PREFIX)
+      ? String(key.name).slice(MESSAGE_PREFIX.length)
+      : String(key.name || "");
+    if (key.metadata && typeof key.metadata === "object") {
+      const summary = summaryFor({ id: fallbackId, ...key.metadata });
+      if (summary) {
+        return { summary, skipped: false };
+      }
+    }
+    const value = await env.MAILBOX.get(key.name);
+    if (!value) {
+      return { summary: null, skipped: true };
+    }
+    const record = JSON.parse(value);
+    const summary = summaryFor({ id: fallbackId, ...record });
+    return summary ? { summary, skipped: false } : { summary: null, skipped: true };
+  } catch {
+    return { summary: null, skipped: true };
   }
 }
 
