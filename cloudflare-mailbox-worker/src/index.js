@@ -1,6 +1,8 @@
 const MESSAGE_PREFIX = "message:";
+const MESSAGE_INDEX_KEY = "message:index";
 const DEFAULT_RETENTION_DAYS = 14;
 const DEFAULT_LIST_LIMIT = 30;
+const DEFAULT_INDEX_LIMIT = 200;
 
 export default {
   async fetch(request, env) {
@@ -60,19 +62,7 @@ export default {
 
 async function listMessages(env, url) {
   const limit = clampLimit(url.searchParams.get("limit"));
-  const listed = await env.MAILBOX.list({ prefix: MESSAGE_PREFIX, limit: 1000 });
-  const messages = (
-    await Promise.all(
-      listed.keys.map(async (key) => {
-        if (key.metadata) {
-          return key.metadata;
-        }
-        const value = await env.MAILBOX.get(key.name);
-        return value ? summaryFor(JSON.parse(value)) : null;
-      })
-    )
-  )
-    .filter((metadata) => metadata)
+  const messages = (await readMessageIndex(env))
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
     .slice(0, limit);
   return json({ messages });
@@ -134,7 +124,11 @@ async function readRecord(env, id) {
   if (!value) {
     return null;
   }
-  return JSON.parse(value);
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 async function saveMessage(env, record) {
@@ -144,6 +138,7 @@ async function saveMessage(env, record) {
     expirationTtl,
     metadata: summaryFor(record),
   });
+  await updateMessageIndex(env, summaryFor(record));
 }
 
 function buildEmailRecord(message, raw) {
@@ -169,8 +164,11 @@ function buildEmailRecord(message, raw) {
 }
 
 function summaryFor(record) {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
   return {
-    id: record.id,
+    id: record.id || "",
     createdAt: record.createdAt,
     subject: record.subject || "",
     from: record.from || { address: "" },
@@ -179,6 +177,54 @@ function summaryFor(record) {
     links: Array.isArray(record.links) ? record.links.slice(0, 10) : [],
     forward: record.forward || null,
   };
+}
+
+async function readMessageIndex(env) {
+  try {
+    const value = await env.MAILBOX.get(MESSAGE_INDEX_KEY);
+    if (!value) {
+      return [];
+    }
+    const parsed = JSON.parse(value);
+    const rawMessages = Array.isArray(parsed) ? parsed : parsed.messages;
+    if (!Array.isArray(rawMessages)) {
+      return [];
+    }
+    return pruneExpiredSummaries(env, rawMessages.map(summaryFor).filter((summary) => summary));
+  } catch {
+    return [];
+  }
+}
+
+async function updateMessageIndex(env, summary) {
+  if (!summary || !summary.id) {
+    return;
+  }
+  const existing = await readMessageIndex(env);
+  const messages = [summary, ...existing.filter((message) => message.id !== summary.id)]
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .slice(0, indexLimit(env));
+  await env.MAILBOX.put(
+    MESSAGE_INDEX_KEY,
+    JSON.stringify({ updatedAt: new Date().toISOString(), messages })
+  );
+}
+
+function pruneExpiredSummaries(env, messages) {
+  const retentionDays = Number(env.MAILBOX_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
+  const cutoff = Date.now() - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
+  return messages.filter((message) => {
+    const createdAt = Date.parse(message.createdAt || "");
+    return Number.isFinite(createdAt) && createdAt >= cutoff;
+  });
+}
+
+function indexLimit(env) {
+  const parsed = Number(env.MAILBOX_INDEX_LIMIT || DEFAULT_INDEX_LIMIT);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_INDEX_LIMIT;
+  }
+  return Math.max(DEFAULT_LIST_LIMIT, Math.min(1000, Math.trunc(parsed)));
 }
 
 function headersToObject(headers) {

@@ -403,12 +403,27 @@ async def roofz_preapplication_watchdog(context: ContextTypes.DEFAULT_TYPE) -> N
                 or datetime.now(timezone.utc) - timedelta(hours=2)
             )
             initial_sent_at = _parse_event_timestamp(row.get("sent_at"))
-            result = await replier.complete_pending_preapplication(
-                listing,
-                since,
-                initial_sent_at,
-                poll_seconds=0,
-            )
+            try:
+                result = await replier.complete_pending_preapplication(
+                    listing,
+                    since,
+                    initial_sent_at,
+                    poll_seconds=0,
+                )
+            except Exception as exc:
+                detail = str(exc)
+                logger.warning("Roofz pre-application mailbox check failed for %s: %s", listing.id, detail)
+                await db.log_event(
+                    "roofz_preapplication_check_failed",
+                    level="warning",
+                    chat_id=row.get("triggered_by_chat_id"),
+                    source=listing.source,
+                    listing_id=listing.id,
+                    title=listing.title,
+                    status="error",
+                    detail=detail,
+                )
+                continue
             if result.status == "sent_preapplication_pending":
                 continue
 
