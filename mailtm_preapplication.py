@@ -178,6 +178,10 @@ def find_complete_application_messages(
         sender_address = (summary.get("from") or {}).get("address") or ""
         seen = bool(summary.get("seen"))
         created_at = _parse_datetime(summary.get("createdAt"))
+        full = None
+        if not subject:
+            full = client.get_message(summary["id"])
+            subject = full.get("subject") or ""
         if unread_only and seen:
             continue
         if since and created_at and created_at < since:
@@ -187,7 +191,8 @@ def find_complete_application_messages(
         if subject_patterns and not any(pattern.casefold() in subject.casefold() for pattern in subject_patterns):
             continue
 
-        full = client.get_message(summary["id"])
+        if full is None:
+            full = client.get_message(summary["id"])
         links = extract_complete_application_links(full)
         found.append(
             MailTmMessage(
@@ -281,6 +286,10 @@ def _find_messages(
         sender_address = (summary.get("from") or {}).get("address") or ""
         seen = bool(summary.get("seen"))
         created_at = _parse_datetime(summary.get("createdAt"))
+        full = None
+        if not subject:
+            full = client.get_message(summary["id"])
+            subject = full.get("subject") or ""
         if unread_only and seen:
             continue
         if since and created_at and created_at < since:
@@ -292,7 +301,8 @@ def _find_messages(
         if listing_title and not _subject_matches_listing(subject, listing_title):
             continue
 
-        full = client.get_message(summary["id"])
+        if full is None:
+            full = client.get_message(summary["id"])
         links = extract_preapplication_links(full)
         if require_links and not links:
             continue

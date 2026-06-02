@@ -124,6 +124,8 @@ def _normalize_summary(message: dict) -> dict:
 def _normalize_full_message(message: dict) -> dict:
     normalized = _normalize_summary(message)
     raw = message.get("raw") if isinstance(message.get("raw"), str) else ""
+    if raw and not normalized["subject"]:
+        normalized["subject"] = _extract_subject_from_raw(raw)
     text_parts, html_parts = _extract_bodies_from_raw(raw)
     if isinstance(message.get("text"), str):
         text_parts.insert(0, message["text"])
@@ -140,6 +142,14 @@ def _normalize_full_message(message: dict) -> dict:
         }
     )
     return normalized
+
+
+def _extract_subject_from_raw(raw: str) -> str:
+    try:
+        parsed = Parser(policy=policy.default).parsestr(raw)
+    except Exception:
+        return ""
+    return str(parsed.get("subject") or "").strip()
 
 
 def _extract_bodies_from_raw(raw: str) -> tuple[list[str], list[str]]:

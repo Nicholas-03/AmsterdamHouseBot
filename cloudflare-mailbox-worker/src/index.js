@@ -182,7 +182,7 @@ function buildEmailRecord(message, raw) {
   return {
     id: crypto.randomUUID(),
     createdAt,
-    subject: headers.subject || "",
+    subject: headers.subject || rawHeader(raw, "subject") || "",
     from: { address: headerFrom || message.from || "" },
     envelopeFrom: message.from || "",
     to: headerTo || message.to || "",
@@ -203,13 +203,41 @@ function summaryFor(record) {
   return {
     id: record.id || "",
     createdAt: record.createdAt,
-    subject: record.subject || "",
+    subject: record.subject || rawHeader(record.raw, "subject") || "",
     from: record.from || { address: "" },
     to: record.to || "",
     seen: Boolean(record.seen),
     links: Array.isArray(record.links) ? record.links.slice(0, 10) : [],
     forward: record.forward || null,
   };
+}
+
+function rawHeader(raw, name) {
+  if (!raw || !name) {
+    return "";
+  }
+  const target = String(name).toLowerCase();
+  const headerBlock = String(raw).split(/\r?\n\r?\n/, 1)[0] || "";
+  let current = "";
+  let value = "";
+  for (const line of headerBlock.split(/\r?\n/)) {
+    if (/^\s/.test(line)) {
+      if (current === target) {
+        value += " " + line.trim();
+      }
+      continue;
+    }
+    const match = line.match(/^([^:]+):(.*)$/);
+    if (!match) {
+      current = "";
+      continue;
+    }
+    current = match[1].trim().toLowerCase();
+    if (current === target) {
+      value = match[2].trim();
+    }
+  }
+  return value;
 }
 
 async function readMessageIndex(env) {

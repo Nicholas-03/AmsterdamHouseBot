@@ -277,6 +277,40 @@ class MailTmPreApplicationTests(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0].message_id, "1")
 
+    def test_find_confirmation_uses_full_message_subject_when_summary_subject_is_missing(self):
+        client = FakeMailTmClient(
+            [
+                {
+                    "id": "1",
+                    "subject": "",
+                    "from": {"address": "living@rockfieldrealestate.com"},
+                    "seen": False,
+                    "createdAt": "2026-06-02T12:07:24+00:00",
+                },
+            ],
+            {
+                "1": {
+                    "subject": "Confirmation of your pre-application for Schipluidenlaan 662, Amsterdam",
+                    "text": "Thank you for your pre-application.",
+                    "html": [],
+                }
+            },
+        )
+
+        messages = find_confirmation_messages(
+            client,
+            _settings(),
+            listing_title="Schipluidenlaan 662",
+            since=datetime(2026, 6, 2, 12, 7, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].message_id, "1")
+        self.assertEqual(
+            messages[0].subject,
+            "Confirmation of your pre-application for Schipluidenlaan 662, Amsterdam",
+        )
+
     def test_find_mailtm_messages_matches_forwarded_funda_confirmation(self):
         client = FakeMailTmClient(
             [

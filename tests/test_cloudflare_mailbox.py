@@ -63,6 +63,28 @@ class CloudflareMailboxTests(unittest.TestCase):
         self.assertEqual(message["forward"]["status"], "failed")
         self.assertEqual(message["forward"]["to"], "person@example.com")
 
+    def test_recovers_missing_subject_from_raw_mime(self):
+        message = _normalize_full_message(
+            {
+                "id": "abc",
+                "subject": "",
+                "from": {"address": "living@rockfieldrealestate.com"},
+                "raw": (
+                    "From: ROOFZ.eu <living@rockfieldrealestate.com>\r\n"
+                    "Subject: Confirmation of your pre-application for Schipluidenlaan 662,\r\n"
+                    " Amsterdam\r\n"
+                    "Content-Type: text/plain; charset=utf-8\r\n"
+                    "\r\n"
+                    "Thank you for your pre-application."
+                ),
+            }
+        )
+
+        self.assertEqual(
+            message["subject"],
+            "Confirmation of your pre-application for Schipluidenlaan 662, Amsterdam",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
