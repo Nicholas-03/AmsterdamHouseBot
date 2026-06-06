@@ -143,6 +143,35 @@ class MailTmPreApplicationTests(unittest.TestCase):
         self.assertEqual(messages[0].message_id, "1")
         self.assertEqual(messages[0].links, ["https://roofz.onosre.com/application/abc"])
 
+    def test_find_complete_application_messages_can_filter_seen_messages(self):
+        client = FakeMailTmClient(
+            [
+                {
+                    "id": "1",
+                    "subject": "Complete application for Spaklerweg 14-E-4, Amsterdam",
+                    "from": {"address": "living@rockfieldrealestate.com"},
+                    "seen": True,
+                    "createdAt": "2026-05-28T10:38:00+00:00",
+                },
+                {
+                    "id": "2",
+                    "subject": "Complete application for Panamalaan 263, Amsterdam",
+                    "from": {"address": "living@rockfieldrealestate.com"},
+                    "seen": False,
+                    "createdAt": "2026-05-28T10:39:00+00:00",
+                },
+            ],
+            {
+                "1": {"html": ['<a href="https://roofz.onosre.com/application/abc">Complete application</a>']},
+                "2": {"html": ['<a href="https://roofz.onosre.com/application/def">Complete application</a>']},
+            },
+        )
+
+        messages = find_complete_application_messages(client, _settings(), unread_only=True)
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].message_id, "2")
+
     def test_find_preapplication_filters_sender_subject_seen_and_title(self):
         client = FakeMailTmClient(
             [

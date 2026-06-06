@@ -115,6 +115,14 @@ class MailTmClient:
         response.raise_for_status()
         return response.json()
 
+    def mark_seen(self, message_id: str) -> None:
+        response = self._client.patch(
+            f"{self.settings.api_base}/messages/{message_id}",
+            headers=self._headers(),
+            json={"seen": True},
+        )
+        response.raise_for_status()
+
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}"}
 

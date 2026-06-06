@@ -93,6 +93,31 @@ class BotLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(log_event.await_args.kwargs["status"], "error")
         context.bot.send_message.assert_not_awaited()
 
+    async def test_roofz_complete_application_marks_message_seen_after_notification(self):
+        message = SimpleNamespace(
+            message_id="message-1",
+            subject="Complete application for Panamalaan 263, Amsterdam",
+            sender='"ROOFZ.eu" <living@rockfieldrealestate.com>',
+            links=("https://roofz.onosre.com/application/abc",),
+            listing_title="Panamalaan 263, Amsterdam",
+        )
+        log_event = AsyncMock()
+        mark_seen = AsyncMock()
+        context = SimpleNamespace(bot=AsyncMock())
+
+        with (
+            patch.object(bot.config, "ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED", True),
+            patch.object(bot, "find_new_complete_application_emails", AsyncMock(return_value=[message])),
+            patch.object(bot, "mark_complete_application_email_seen", mark_seen),
+            patch.object(bot, "_get_active_allowed_users", AsyncMock(return_value=[{"chat_id": 123, "enabled_sources": '["roofz"]'}])),
+            patch.object(bot.db, "bot_event_exists", AsyncMock(return_value=False)),
+            patch.object(bot.db, "log_event", log_event),
+        ):
+            await bot.roofz_complete_application_watchdog(context)
+
+        context.bot.send_message.assert_awaited_once()
+        mark_seen.assert_awaited_once_with("message-1")
+
 
 if __name__ == "__main__":
     unittest.main()

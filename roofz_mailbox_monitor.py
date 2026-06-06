@@ -50,6 +50,7 @@ async def find_new_complete_application_emails() -> list[RoofzCompleteApplicatio
                 client,
                 mailbox_settings,
                 subject_patterns=config.ROOFZ_COMPLETE_APPLICATION_SUBJECT_PATTERNS,
+                unread_only=True,
             )
         return [
             RoofzCompleteApplicationEmail(
@@ -62,3 +63,19 @@ async def find_new_complete_application_emails() -> list[RoofzCompleteApplicatio
         ]
 
     return await asyncio.to_thread(_read_messages)
+
+
+async def mark_complete_application_email_seen(message_id: str) -> None:
+    settings = RoofzReplySettings.from_config()
+    ready_error = complete_application_monitor_ready_error(settings)
+    if ready_error:
+        raise RuntimeError(ready_error)
+
+    mailbox_settings = settings.cloudflare_mailbox if settings.mailbox_provider == "cloudflare" else settings.mailtm
+    client_factory = CloudflareMailboxClient if settings.mailbox_provider == "cloudflare" else MailTmClient
+
+    def _mark_seen() -> None:
+        with client_factory(mailbox_settings) as client:
+            client.mark_seen(message_id)
+
+    await asyncio.to_thread(_mark_seen)

@@ -21,7 +21,7 @@ import db
 from funda_replier import FundaReplySettings
 from kamernet_replier import KamernetReplySettings
 from notification_sources import ALL_SOURCES, SOURCE_LABELS, format_sources, normalize_sources, parse_source_tokens
-from roofz_mailbox_monitor import find_new_complete_application_emails
+from roofz_mailbox_monitor import find_new_complete_application_emails, mark_complete_application_email_seen
 from roofz_replier import RoofzReplier, RoofzReplySettings
 from scanner import run_scan_for_user
 from scrapers.base import Listing
@@ -320,6 +320,10 @@ async def roofz_complete_application_watchdog(context: ContextTypes.DEFAULT_TYPE
             source="roofz",
             listing_id=message.message_id,
         ):
+            try:
+                await mark_complete_application_email_seen(message.message_id)
+            except Exception as exc:
+                logger.warning("Could not mark Roofz complete-application email seen: %s", exc)
             continue
 
         await db.log_event(
@@ -362,6 +366,10 @@ async def roofz_complete_application_watchdog(context: ContextTypes.DEFAULT_TYPE
             status="sent",
             data={"notified_users": notified_users},
         )
+        try:
+            await mark_complete_application_email_seen(message.message_id)
+        except Exception as exc:
+            logger.warning("Could not mark Roofz complete-application email seen: %s", exc)
 
 
 async def roofz_preapplication_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None:

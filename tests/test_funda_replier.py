@@ -3,7 +3,13 @@ import unittest
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-from funda_replier import FundaConfirmationSettings, FundaReplier, FundaReplySettings, _build_contact_payload
+from funda_replier import (
+    FundaConfirmationSettings,
+    FundaReplier,
+    FundaReplySettings,
+    _build_contact_payload,
+    find_funda_confirmation_messages,
+)
 from cloudflare_mailbox import CloudflareMailboxAuthSettings
 from mailtm_preapplication import MailTmAuthSettings
 from scrapers.base import Listing
@@ -110,6 +116,54 @@ class FundaReplierTests(unittest.IsolatedAsyncioTestCase):
             result = await replier.reply_to_listing(_listing(reply_data={"global_id": "", "office_id": ""}))
 
         self.assertEqual(result.status, "missing_contact_data")
+
+
+class FundaConfirmationMatchingTests(unittest.TestCase):
+    def test_generic_gohome_funda_email_counts_as_confirmation(self):
+        client = _FakeMailboxClient(
+            [
+                {
+                    "id": "message-1",
+                    "subject": "GoHome | aanvraag voor een bezichtiging via Funda",
+                    "from": {"address": '"verhuur@gohome.io" <verhuur@gohome.io>'},
+                    "createdAt": "2026-06-03T12:48:37Z",
+                    "seen": False,
+                }
+            ],
+            {
+                "message-1": {
+                    "subject": "GoHome | aanvraag voor een bezichtiging via Funda",
+                    "text": (
+                        "Hi, Wat leuk dat je interesse hebt in een woning die wij via Funda aanbieden. "
+                        "You can plan your own viewing."
+                    ),
+                    "html": [],
+                }
+            },
+        )
+
+        messages = find_funda_confirmation_messages(
+            client,
+            senders=("notificaties@service.funda.nl",),
+            subject_patterns=("bevestiging", "confirmation", "confirmed"),
+            listing_title="Valkenstein 46-1",
+            since=None,
+        )
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].message_id, "message-1")
+
+
+class _FakeMailboxClient:
+    def __init__(self, summaries, full_messages):
+        self._summaries = summaries
+        self._full_messages = full_messages
+
+    def list_messages(self):
+        return self._summaries
+
+    def get_message(self, message_id):
+        return self._full_messages[message_id]
 
 
 if __name__ == "__main__":

@@ -9,10 +9,24 @@ from datetime import datetime, timezone
 import httpx
 
 from cloudflare_mailbox import CloudflareMailboxAuthSettings, CloudflareMailboxClient
-from mailtm_preapplication import MailTmAuthSettings, MailTmClient, find_mailtm_messages, mailtm_senders
+from mailtm_preapplication import (
+    MailTmAuthSettings,
+    MailTmClient,
+    MailTmMessage,
+    _message_bodies,
+    _parse_datetime,
+    find_mailtm_messages,
+    mailtm_senders,
+)
 from scrapers.base import Listing
 
 logger = logging.getLogger(__name__)
+
+_GENERIC_FUNDA_CONFIRMATION_PATTERNS = (
+    "aanvraag voor een bezichtiging via funda",
+    "interesse hebt in een woning die wij via funda aanbieden",
+    "thank you for your interest in a property that we list on funda",
+)
 
 
 @dataclass(frozen=True)
@@ -224,7 +238,7 @@ class FundaReplier:
             with confirmation.open_client() as mailbox:
                 while True:
                     messages = await asyncio.to_thread(
-                        find_mailtm_messages,
+                        find_funda_confirmation_messages,
                         mailbox,
                         confirmation.senders,
                         confirmation.subject_patterns,
@@ -252,6 +266,59 @@ class FundaReplier:
                 f"Funda accepted the contact request, but mailbox confirmation check failed: {exc}",
                 sent_at=sent_at,
             )
+
+
+def find_funda_confirmation_messages(
+    client,
+    senders: tuple[str, ...],
+    subject_patterns: tuple[str, ...],
+    listing_title: str = "",
+    since: datetime | None = None,
+) -> list[MailTmMessage]:
+    strict_matches = find_mailtm_messages(
+        client,
+        senders,
+        subject_patterns,
+        listing_title,
+        since,
+    )
+    if strict_matches:
+        return strict_matches
+    return _find_generic_funda_confirmation_messages(client, since=since)
+
+
+def _find_generic_funda_confirmation_messages(client, since: datetime | None = None) -> list[MailTmMessage]:
+    found: list[MailTmMessage] = []
+    for summary in client.list_messages():
+        message_id = summary.get("id") or summary.get("message_id") or ""
+        if not message_id:
+            continue
+        created_at = _parse_datetime(summary.get("createdAt") or summary.get("created_at"))
+        if since and created_at and created_at < since:
+            continue
+
+        subject = summary.get("subject") or ""
+        sender_address = (summary.get("from") or {}).get("address") or summary.get("sender") or ""
+        seen = bool(summary.get("seen"))
+        full = client.get_message(message_id)
+        if not subject:
+            subject = full.get("subject") or ""
+        combined = f"{subject}\n" + "\n".join(_message_bodies(full))
+        combined_key = combined.casefold()
+        if not any(pattern in combined_key for pattern in _GENERIC_FUNDA_CONFIRMATION_PATTERNS):
+            continue
+
+        found.append(
+            MailTmMessage(
+                message_id=message_id,
+                subject=subject,
+                sender=sender_address,
+                created_at=created_at,
+                seen=seen,
+                links=[],
+            )
+        )
+    return sorted(found, key=lambda message: message.created_at or datetime.min.replace(tzinfo=timezone.utc))
 
 
 def _build_contact_payload(settings: FundaReplySettings) -> dict:
