@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-import scanner
-from notification_sources import ALL_SOURCES, normalize_sources, parse_source_tokens
+from housebot import scanner
+from housebot.notification_sources import ALL_SOURCES, normalize_sources, parse_source_tokens
+from housebot.scrapers.base import Listing
 
 
 class NotificationSourceParsingTests(unittest.TestCase):
@@ -160,6 +161,73 @@ class ScannerSourceSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(timeout_events), 1)
         self.assertEqual(timeout_events[0].kwargs["source"], "roofz")
         self.assertEqual(timeout_events[0].kwargs["status"], "timeout")
+
+    async def test_run_scan_enqueues_pararius_auto_reply_for_new_listing(self):
+        user_filters = {
+            "chat_id": 123,
+            "city": "Amsterdam",
+            "max_price": 1500,
+            "min_bedrooms": 1,
+            "min_size_m2": 25,
+            "kamernet_property_type": "studio",
+            "auto_reply_enabled": True,
+            "enabled_sources": ("pararius",),
+            "active": True,
+            "setup_in_progress": False,
+        }
+        listing = Listing(
+            id="pararius-listing",
+            source="pararius",
+            title="Pararius listing",
+            price="EUR 1200/month",
+            address="Amsterdam",
+            url="https://www.pararius.nl/appartement-te-huur/amsterdam/abc/example",
+            contact_url="https://www.pararius.nl/contact/abc",
+        )
+        enqueue = AsyncMock(return_value=True)
+
+        class ReadySettings:
+            enabled = True
+            dry_run = True
+            max_per_scan = 0
+
+            def ready_error(self):
+                return None
+
+        class FakeParariusScraper:
+            SOURCE = "pararius"
+            last_error = ""
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def scrape(self):
+                return [listing]
+
+            def _build_url(self):
+                return "https://www.pararius.nl/huurwoningen/amsterdam"
+
+        with (
+            patch.object(scanner, "ParariusScraper", FakeParariusScraper),
+            patch.object(scanner.ParariusReplySettings, "from_config", return_value=ReadySettings()),
+            patch.object(scanner.db, "get_filters", AsyncMock(return_value=user_filters)),
+            patch.object(scanner.db, "log_event", AsyncMock()),
+            patch.object(scanner.db, "was_sent", AsyncMock(return_value=False)),
+            patch.object(
+                scanner.db,
+                "mark_seen",
+                AsyncMock(return_value={"scraped_at": "2026-06-07T12:00:00+00:00", "inserted": True}),
+            ),
+            patch.object(scanner.db, "mark_sent", AsyncMock()),
+            patch.object(scanner, "_send_notification", AsyncMock()),
+            patch.object(scanner, "_enqueue_auto_reply_to_listing", enqueue),
+        ):
+            count = await scanner.run_scan_for_user(AsyncMock(), user_filters)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(enqueue.await_args.kwargs, {})
+        self.assertEqual(enqueue.await_args.args[1], listing)
+        self.assertEqual(enqueue.await_args.args[7], "Pararius")
 
 
 if __name__ == "__main__":

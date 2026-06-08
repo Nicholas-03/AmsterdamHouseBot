@@ -29,7 +29,9 @@ function Copy-FilteredProject {
         "ENV",
         "__pycache__",
         ".mypy_cache",
-        ".pytest_cache"
+        ".pytest_cache",
+        "output",
+        "assets"
     )
     $excludedFileNames = @(
         ".env",
@@ -38,6 +40,8 @@ function Copy-FilteredProject {
         "kamernet_storage_state.json",
         "funda_reply_message.txt",
         "funda_storage_state.json",
+        "pararius_reply_message.txt",
+        "pararius_storage_state.json",
         "roofz_reply_message.txt"
     )
     $excludedExtensions = @(".db", ".sqlite3")
@@ -126,6 +130,158 @@ function New-PortableZip {
     }
 }
 
+function New-SafeRemoteDocumentName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Prefix,
+
+        [Parameter(Mandatory = $true)]
+        [int]$Index,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $baseName = [System.IO.Path]::GetFileName($Path)
+    $safeBaseName = [regex]::Replace($baseName, "[^A-Za-z0-9._-]", "_")
+    return "$Prefix-$Index-$safeBaseName"
+}
+
+function Copy-RoofzDocumentForDeploy {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RawPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Prefix,
+
+        [Parameter(Mandatory = $true)]
+        [int]$Index,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DocumentsDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RemoteDocumentsDirectory
+    )
+
+    $trimmedPath = $RawPath.Trim().Trim('"')
+    if (-not $trimmedPath) {
+        return ""
+    }
+
+    if ($trimmedPath.StartsWith("/")) {
+        return @{
+            RemotePath = $trimmedPath
+            Copied = $false
+        }
+    }
+
+    $resolvedPath = (Resolve-Path -LiteralPath $trimmedPath).Path
+    $remoteName = New-SafeRemoteDocumentName -Prefix $Prefix -Index $Index -Path $resolvedPath
+    Copy-Item -LiteralPath $resolvedPath -Destination (Join-Path $DocumentsDirectory $remoteName)
+    return @{
+        RemotePath = "$RemoteDocumentsDirectory/$remoteName"
+        Copied = $true
+    }
+}
+
+function Convert-EnvForRemoteRoofzDocuments {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EnvContent,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DocumentsDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RemoteDocumentsDirectory
+    )
+
+    $singleDocumentKeys = @{
+        "ROOFZ_COMPLETE_ID_DOCUMENT_PATH" = "identity-document"
+        "ROOFZ_COMPLETE_EDUCATIONAL_REGISTRATION_PATH" = "educational-registration"
+        "ROOFZ_COMPLETE_DEED_OF_GUARANTEE_PATH" = "deed-of-guarantee"
+    }
+    $listDocumentKeys = @{
+        "ROOFZ_COMPLETE_SALARY_SLIP_PATHS" = "salary-slip"
+        "ROOFZ_COMPLETE_BANK_STATEMENT_PATHS" = "bank-statement"
+    }
+
+    New-Item -ItemType Directory -Force -Path $DocumentsDirectory | Out-Null
+
+    $copiedCount = 0
+    $rewrittenLines = foreach ($line in ($EnvContent -split "`n")) {
+        if ($line -notmatch "^([^#=\s]+)=(.*)$") {
+            $line
+            continue
+        }
+
+        $key = $Matches[1]
+        $value = $Matches[2]
+
+        if ($singleDocumentKeys.ContainsKey($key)) {
+            $document = Copy-RoofzDocumentForDeploy `
+                -RawPath $value `
+                -Prefix $singleDocumentKeys[$key] `
+                -Index 1 `
+                -DocumentsDirectory $DocumentsDirectory `
+                -RemoteDocumentsDirectory $RemoteDocumentsDirectory
+            if ($document.RemotePath) {
+                if ($document.Copied) {
+                    $copiedCount += 1
+                }
+                "$key=$($document.RemotePath)"
+            }
+            else {
+                $line
+            }
+            continue
+        }
+
+        if ($listDocumentKeys.ContainsKey($key)) {
+            $remotePaths = @()
+            $index = 1
+            foreach ($path in ($value -split ",")) {
+                $trimmedPath = $path.Trim()
+                if (-not $trimmedPath) {
+                    continue
+                }
+                $document = Copy-RoofzDocumentForDeploy `
+                    -RawPath $trimmedPath `
+                    -Prefix $listDocumentKeys[$key] `
+                    -Index $index `
+                    -DocumentsDirectory $DocumentsDirectory `
+                    -RemoteDocumentsDirectory $RemoteDocumentsDirectory
+                if ($document.RemotePath) {
+                    $remotePaths += $document.RemotePath
+                    if (-not $document.RemotePath.StartsWith("/")) {
+                        throw "Unexpected non-absolute remote document path for $key."
+                    }
+                    if ($document.Copied) {
+                        $copiedCount += 1
+                    }
+                }
+                $index += 1
+            }
+            if ($remotePaths.Count -gt 0) {
+                "$key=$($remotePaths -join ',')"
+            }
+            else {
+                $line
+            }
+            continue
+        }
+
+        $line
+    }
+
+    return @{
+        Content = ($rewrittenLines -join "`n")
+        CopiedCount = $copiedCount
+    }
+}
+
 Require-Command "ssh"
 Require-Command "scp"
 Add-Type -AssemblyName System.IO.Compression
@@ -152,13 +308,17 @@ if ($IdentityFile) {
 $timestamp = Get-Date -Format "yyyyMMddHHmmss"
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "amsterdam-house-bot-deploy-$timestamp"
 $staging = Join-Path $tempRoot "package"
+$documentsStaging = Join-Path $tempRoot "roofz-documents"
 $archive = Join-Path $tempRoot "amsterdam-house-bot.zip"
+$documentsArchive = Join-Path $tempRoot "roofz-documents.zip"
 $envLfPath = Join-Path $tempRoot "bot.env"
 $bootstrapLfPath = Join-Path $tempRoot "vps_bootstrap.sh"
 $target = "${User}@${DropletHost}"
 $remoteArchive = "/tmp/amsterdam-house-bot-$timestamp.zip"
+$remoteDocumentsArchive = "/tmp/amsterdam-house-bot-documents-$timestamp.zip"
 $remoteEnv = "/tmp/amsterdam-house-bot-$timestamp.env"
 $remoteBootstrap = "/tmp/amsterdam-house-bot-bootstrap-$timestamp.sh"
+$remoteDocumentsDirectory = "/var/lib/amsterdam-house-bot/roofz-documents"
 
 try {
     Write-Host "Packaging project from $repoRoot"
@@ -171,8 +331,18 @@ try {
     Write-Host "Uploading environment file"
     $envContent = [System.IO.File]::ReadAllText($envPath).Replace("`r`n", "`n").Replace("`r", "`n")
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($envLfPath, $envContent, $utf8NoBom)
+    $documentEnv = Convert-EnvForRemoteRoofzDocuments `
+        -EnvContent $envContent `
+        -DocumentsDirectory $documentsStaging `
+        -RemoteDocumentsDirectory $remoteDocumentsDirectory
+    [System.IO.File]::WriteAllText($envLfPath, $documentEnv.Content, $utf8NoBom)
     Invoke-Native "scp" @identityArgs $envLfPath "${target}:$remoteEnv"
+
+    if ($documentEnv.CopiedCount -gt 0) {
+        Write-Host "Uploading Roofz application documents"
+        New-PortableZip -SourceDirectory $documentsStaging -ArchivePath $documentsArchive
+        Invoke-Native "scp" @identityArgs $documentsArchive "${target}:$remoteDocumentsArchive"
+    }
 
     Write-Host "Uploading bootstrap script"
     $bootstrapContent = [System.IO.File]::ReadAllText($bootstrapPath).Replace("`r`n", "`n")
@@ -180,7 +350,12 @@ try {
     Invoke-Native "scp" @identityArgs $bootstrapLfPath "${target}:$remoteBootstrap"
 
     Write-Host "Running remote bootstrap"
-    Invoke-Native "ssh" @identityArgs $target "chmod +x '$remoteBootstrap' && bash '$remoteBootstrap' '$remoteArchive' '$remoteEnv'"
+    if ($documentEnv.CopiedCount -gt 0) {
+        Invoke-Native "ssh" @identityArgs $target "chmod +x '$remoteBootstrap' && bash '$remoteBootstrap' '$remoteArchive' '$remoteEnv' '$remoteDocumentsArchive'"
+    }
+    else {
+        Invoke-Native "ssh" @identityArgs $target "chmod +x '$remoteBootstrap' && bash '$remoteBootstrap' '$remoteArchive' '$remoteEnv'"
+    }
 
     Write-Host ""
     Write-Host "Deployment complete."

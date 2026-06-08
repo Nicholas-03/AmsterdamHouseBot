@@ -1,7 +1,7 @@
 [project]
-name = "amesterdamhousebot"
+name = "amsterdam-house-bot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Telegram bot for Amsterdam rental listing notifications and auto-replies"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 import httpx
 
-from cloudflare_mailbox import CloudflareMailboxAuthSettings, CloudflareMailboxClient
-from mailtm_preapplication import (
+from housebot.cloudflare_mailbox import CloudflareMailboxAuthSettings, CloudflareMailboxClient
+from housebot.mailtm_preapplication import (
     MailTmAuthSettings,
     MailTmClient,
     MailTmMessage,
@@ -18,7 +18,7 @@ from mailtm_preapplication import (
     find_mailtm_messages,
     mailtm_senders,
 )
-from scrapers.base import Listing
+from housebot.scrapers.base import Listing
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class FundaConfirmationSettings:
 
     @classmethod
     def from_config(cls) -> FundaConfirmationSettings:
-        import config
+        from housebot import config
 
         return cls(
             enabled=config.FUNDA_CONFIRMATION_ENABLED,
@@ -109,7 +109,7 @@ class FundaReplySettings:
 
     @classmethod
     def from_config(cls) -> FundaReplySettings:
-        import config
+        from housebot import config
 
         return cls(
             enabled=config.FUNDA_AUTO_REPLY_ENABLED,

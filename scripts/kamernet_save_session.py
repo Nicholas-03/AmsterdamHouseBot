@@ -10,7 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
 
-from kamernet_replier import KamernetReplySettings
+from housebot.kamernet_replier import KamernetReplySettings
 
 DEFAULT_LISTING_URL = (
     "https://kamernet.nl/en/for-rent/studio-amsterdam/"

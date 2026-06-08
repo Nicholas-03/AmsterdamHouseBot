@@ -3,9 +3,9 @@ import unittest
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-from mailtm_preapplication import MailTmSettings
-from cloudflare_mailbox import CloudflareMailboxSettings
-from roofz_replier import (
+from housebot.mailtm_preapplication import MailTmSettings
+from housebot.cloudflare_mailbox import CloudflareMailboxSettings
+from housebot.roofz_replier import (
     RoofzReplier,
     RoofzReplyResult,
     RoofzReplySettings,
@@ -14,7 +14,7 @@ from roofz_replier import (
     _parse_osre_invitation,
     _radio_option_matches,
 )
-from scrapers.base import Listing
+from housebot.scrapers.base import Listing
 
 
 def _settings(**overrides) -> RoofzReplySettings:
@@ -22,8 +22,8 @@ def _settings(**overrides) -> RoofzReplySettings:
         "enabled": True,
         "dry_run": True,
         "email": "tenant@example.com",
-        "first_name": "Nicholas",
-        "last_name": "Boidi",
+        "first_name": "Alex",
+        "last_name": "Tenant",
         "phone_number": "+391234567890",
         "message": "Dear property manager\n\nI am interested in this property.",
         "max_per_scan": 1,
@@ -121,8 +121,8 @@ class RoofzReplySettingsTests(unittest.TestCase):
         payload = _build_contact_payload(_settings(), "12532581")
 
         self.assertEqual(payload["candidate"], {"email": "tenant@example.com"})
-        self.assertEqual(payload["subscription"]["firstname"], "Nicholas")
-        self.assertEqual(payload["subscription"]["lastname"], "Boidi")
+        self.assertEqual(payload["subscription"]["firstname"], "Alex")
+        self.assertEqual(payload["subscription"]["lastname"], "Tenant")
         self.assertEqual(payload["subscription"]["phone"], "+391234567890")
         self.assertEqual(payload["subscription"]["property_id"], 12532581)
         self.assertIn("_ts", payload["subscription"]["metadata"])
@@ -144,10 +144,10 @@ class RoofzReplySettingsTests(unittest.TestCase):
     def test_build_preapplication_payload_matches_osre_api_shape(self):
         payload = _build_preapplication_payload(
             _settings(
-                birth_date="21-04-2003",
+                birth_date="01-01-2000",
                 monthly_income="800",
-                savings="300000",
-                bank_name="Intesa san Paolo",
+                savings="100000",
+                bank_name="Example Bank",
             ),
             "invite-id",
         )
@@ -155,12 +155,12 @@ class RoofzReplySettingsTests(unittest.TestCase):
         person = payload["application"]["person"]
         financial = person["financialSituation"]
         self.assertEqual(payload["invitationId"], "invite-id")
-        self.assertEqual(person["personalDetails"]["dateOfBirth"], "2003-04-21")
+        self.assertEqual(person["personalDetails"]["dateOfBirth"], "2000-01-01")
         self.assertEqual(person["personalDetails"]["gender"], "male")
         self.assertEqual(person["workSituation"]["workSituation"], "student")
         self.assertEqual(person["workSituation"]["workMonthlySalary"], 800)
-        self.assertEqual(financial["financialSavings"], 300000)
-        self.assertEqual(financial["bankName"], "Intesa san Paolo")
+        self.assertEqual(financial["financialSavings"], 100000)
+        self.assertEqual(financial["bankName"], "Example Bank")
 
     def test_radio_option_matching_does_not_match_male_inside_female(self):
         self.assertTrue(_radio_option_matches("male", "male", "Male"))

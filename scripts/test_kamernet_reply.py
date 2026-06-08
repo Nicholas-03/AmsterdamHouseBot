@@ -7,8 +7,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from kamernet_replier import KamernetReplier, KamernetReplySettings
-from scrapers.base import Listing
+from housebot.kamernet_replier import KamernetReplier, KamernetReplySettings
+from housebot.scrapers.base import Listing
 
 
 async def main() -> int:

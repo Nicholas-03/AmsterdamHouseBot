@@ -6,8 +6,8 @@ from pathlib import Path
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-import db
-from notification_sources import ALL_SOURCES
+from housebot import db
+from housebot.notification_sources import ALL_SOURCES
 
 
 class BotEventLoggingTests(unittest.IsolatedAsyncioTestCase):

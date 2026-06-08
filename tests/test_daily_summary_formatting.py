@@ -3,7 +3,7 @@ import unittest
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-from bot import _format_daily_summary_text
+from housebot.bot import _format_daily_summary_text
 
 
 class DailySummaryFormattingTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class DailySummaryFormattingTests(unittest.TestCase):
             "\n".join(
                 [
                     "Daily housing summary",
-                    "Last 24h",
+                    "Period: last 24h",
                     "",
                     "New listings",
                     "- Kamernet: 3",

@@ -1,10 +1,10 @@
 import unittest
 
-from cloudflare_mailbox import (
+from housebot.cloudflare_mailbox import (
     CloudflareMailboxAuthSettings,
     _normalize_full_message,
 )
-from mailtm_preapplication import extract_preapplication_links
+from housebot.mailtm_preapplication import extract_preapplication_links
 
 
 class CloudflareMailboxTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class CloudflareMailboxTests(unittest.TestCase):
     def test_normalizes_raw_mime_for_existing_link_extractor(self):
         raw = (
             "From: ROOFZ.eu <living@rockfieldrealestate.com>\r\n"
-            "To: housing@nicholasboidi.tech\r\n"
+            "To: housing@example.com\r\n"
             "Subject: Start your pre-application for Jan van Galenstraat 502, Amsterdam.\r\n"
             "Content-Type: text/html; charset=utf-8\r\n"
             "\r\n"

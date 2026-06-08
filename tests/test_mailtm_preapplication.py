@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import unittest
 
-from mailtm_preapplication import (
+from housebot.mailtm_preapplication import (
     MailTmSettings,
     extract_complete_application_links,
     extract_preapplication_links,

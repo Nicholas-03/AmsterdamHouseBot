@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from scrapers.funda import FundaScraper
+from housebot.scrapers.funda import FundaScraper
 
 
 def _raw_listing(**overrides):

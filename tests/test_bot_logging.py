@@ -7,7 +7,7 @@ os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
 from telegram.error import NetworkError
 
-import bot
+from housebot import bot
 
 
 class BotLoggingTests(unittest.IsolatedAsyncioTestCase):
@@ -93,7 +93,7 @@ class BotLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(log_event.await_args.kwargs["status"], "error")
         context.bot.send_message.assert_not_awaited()
 
-    async def test_roofz_complete_application_marks_message_seen_after_notification(self):
+    async def test_roofz_complete_application_auto_submits_and_marks_message_seen(self):
         message = SimpleNamespace(
             message_id="message-1",
             subject="Complete application for Panamalaan 263, Amsterdam",
@@ -104,18 +104,41 @@ class BotLoggingTests(unittest.IsolatedAsyncioTestCase):
         log_event = AsyncMock()
         mark_seen = AsyncMock()
         context = SimpleNamespace(bot=AsyncMock())
+        completed = []
+
+        class ReadySettings:
+            enabled = True
+
+            def ready_error(self):
+                return None
+
+        class FakeCompleter:
+            def __init__(self, settings):
+                self.settings = settings
+
+            async def complete_application(self, url):
+                completed.append(url)
+                return SimpleNamespace(
+                    status="complete_application_sent",
+                    detail="sent",
+                    sent_at=None,
+                )
 
         with (
             patch.object(bot.config, "ROOFZ_COMPLETE_APPLICATION_MONITOR_ENABLED", True),
             patch.object(bot, "find_new_complete_application_emails", AsyncMock(return_value=[message])),
             patch.object(bot, "mark_complete_application_email_seen", mark_seen),
+            patch.object(bot.RoofzCompleteApplicationSettings, "from_config", return_value=ReadySettings()),
+            patch.object(bot, "RoofzCompleteApplicationCompleter", FakeCompleter),
             patch.object(bot, "_get_active_allowed_users", AsyncMock(return_value=[{"chat_id": 123, "enabled_sources": '["roofz"]'}])),
             patch.object(bot.db, "bot_event_exists", AsyncMock(return_value=False)),
             patch.object(bot.db, "log_event", log_event),
         ):
             await bot.roofz_complete_application_watchdog(context)
 
+        self.assertEqual(completed, ["https://roofz.onosre.com/application/abc"])
         context.bot.send_message.assert_awaited_once()
+        self.assertIn("completed", context.bot.send_message.await_args.kwargs["text"].casefold())
         mark_seen.assert_awaited_once_with("message-1")
 
 

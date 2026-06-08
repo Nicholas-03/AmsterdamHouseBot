@@ -4,8 +4,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-import config
-import db
+from housebot import config
+from housebot import db
 
 logger = logging.getLogger(__name__)
 

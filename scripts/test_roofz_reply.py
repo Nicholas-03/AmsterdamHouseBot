@@ -7,9 +7,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from roofz_replier import RoofzReplier, RoofzReplySettings
-from scrapers.base import Listing
-from scrapers.roofz import RoofzScraper
+from housebot.roofz_replier import RoofzReplier, RoofzReplySettings
+from housebot.scrapers.base import Listing
+from housebot.scrapers.roofz import RoofzScraper
 
 
 async def main() -> int:

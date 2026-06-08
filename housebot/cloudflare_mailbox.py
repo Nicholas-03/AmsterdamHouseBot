@@ -32,7 +32,7 @@ class CloudflareMailboxSettings(CloudflareMailboxAuthSettings):
 
     @classmethod
     def from_config(cls) -> CloudflareMailboxSettings:
-        import config
+        from housebot import config
 
         return cls(
             api_base=config.CLOUDFLARE_MAILBOX_API_BASE,

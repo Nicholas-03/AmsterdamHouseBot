@@ -39,7 +39,7 @@ class MailTmSettings(MailTmAuthSettings):
 
     @classmethod
     def from_config(cls) -> MailTmSettings:
-        import config
+        from housebot import config
 
         return cls(
             api_base=config.ROOFZ_MAILTM_API_BASE,

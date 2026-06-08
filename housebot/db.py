@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
-from config import DB_PATH
-from notification_sources import DEFAULT_ENABLED_SOURCES_JSON, normalize_sources, serialize_sources
-from scrapers.kamernet import serialize_kamernet_property_types
+from housebot.config import DB_PATH
+from housebot.notification_sources import DEFAULT_ENABLED_SOURCES_JSON, normalize_sources, serialize_sources
+from housebot.scrapers.kamernet import serialize_kamernet_property_types
 
 logger = logging.getLogger(__name__)
 

@@ -19,7 +19,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from scrapers.base import Listing
+from housebot.scrapers.base import Listing
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ class KamernetReplySettings:
 
     @classmethod
     def from_config(cls) -> KamernetReplySettings:
-        import config
+        from housebot import config
 
         return cls(
             enabled=config.KAMERNET_AUTO_REPLY_ENABLED,

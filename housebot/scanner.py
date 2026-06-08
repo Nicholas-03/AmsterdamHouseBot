@@ -1,29 +1,31 @@
 import asyncio
 from html import escape
 import logging
+import re
 from datetime import datetime, timezone
 
 from telegram import Bot
 from telegram.constants import ParseMode
 
-from auto_reply_queue import AUTO_REPLY_QUEUE, AutoReplyJob
-import config
-import db
-from funda_replier import FundaReplier, FundaReplyResult, FundaReplySettings
-from kamernet_replier import (
+from housebot.auto_reply_queue import AUTO_REPLY_QUEUE, AutoReplyJob
+from housebot import config
+from housebot import db
+from housebot.funda_replier import FundaReplier, FundaReplyResult, FundaReplySettings
+from housebot.kamernet_replier import (
     KamernetReplier,
     KamernetReplyResult,
     KamernetReplySettings,
     should_skip_existing_reply,
 )
-from notification_sources import ALL_SOURCES, normalize_sources
-from roofz_replier import RoofzReplier, RoofzReplyResult, RoofzReplySettings
-from scrapers.funda import FundaScraper
-from scrapers.huurwoningen import HuurwoningenScraper
-from scrapers.kamernet import KamernetScraper
-from scrapers.pararius import ParariusScraper
-from scrapers.roofz import RoofzScraper
-from source_health import SOURCE_HEALTH
+from housebot.notification_sources import ALL_SOURCES, SOURCE_LABELS, normalize_sources
+from housebot.pararius_replier import ParariusReplier, ParariusReplyResult, ParariusReplySettings
+from housebot.roofz_replier import RoofzReplier, RoofzReplyResult, RoofzReplySettings
+from housebot.scrapers.funda import FundaScraper
+from housebot.scrapers.huurwoningen import HuurwoningenScraper
+from housebot.scrapers.kamernet import KamernetScraper
+from housebot.scrapers.pararius import ParariusScraper
+from housebot.scrapers.roofz import RoofzScraper
+from housebot.source_health import SOURCE_HEALTH
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,9 @@ _AUTO_REPLY_OK_STATUSES = {
     "confirmation_confirmed",
     "preapplication_confirmed",
     "preapplication_sent",
+    "submitted_unconfirmed",
 }
+_AUTO_REPLY_CONFIRMATION_STATUSES = _AUTO_REPLY_OK_STATUSES - {"dry_run_ready"}
 
 
 _FILTER_MATCH_KEYS = (
@@ -92,7 +96,23 @@ async def run_scan_for_user(
     funda_reply_settings_error = funda_reply_settings.ready_error()
     roofz_reply_settings = RoofzReplySettings.from_config()
     roofz_reply_settings_error = roofz_reply_settings.ready_error()
+    pararius_reply_settings = ParariusReplySettings.from_config()
+    pararius_reply_settings_error = pararius_reply_settings.ready_error()
     if user_filters.get("auto_reply_enabled"):
+        if (
+            ParariusScraper.SOURCE in enabled_source_set
+            and pararius_reply_settings.enabled
+            and pararius_reply_settings_error
+        ):
+            logger.warning("Pararius auto-reply is unavailable for this scan: %s", pararius_reply_settings_error)
+            await db.log_event(
+                "auto_reply_settings_unavailable",
+                level="warning",
+                chat_id=chat_id,
+                source=ParariusScraper.SOURCE,
+                status="not_ready",
+                detail=pararius_reply_settings_error,
+            )
         if (
             KamernetScraper.SOURCE in enabled_source_set
             and kamernet_reply_settings.enabled
@@ -180,6 +200,7 @@ async def run_scan_for_user(
 
     new_count = 0
     reply_attempts = {
+        ParariusScraper.SOURCE: 0,
         KamernetScraper.SOURCE: 0,
         FundaScraper.SOURCE: 0,
         RoofzScraper.SOURCE: 0,
@@ -260,7 +281,22 @@ async def run_scan_for_user(
                 await _send_notification(bot, chat_id, listing)
                 await db.mark_sent(chat_id, listing.source, listing.id)
                 if user_filters.get("auto_reply_enabled"):
-                    if listing.source == KamernetScraper.SOURCE:
+                    if listing.source == ParariusScraper.SOURCE:
+                        attempted = await _enqueue_auto_reply_to_listing(
+                            chat_id,
+                            listing,
+                            pararius_reply_settings,
+                            pararius_reply_settings_error,
+                            reply_attempts[ParariusScraper.SOURCE],
+                            ParariusReplier,
+                            ParariusReplyResult,
+                            "Pararius",
+                            bot,
+                            reply_timing_start,
+                        )
+                        if attempted:
+                            reply_attempts[ParariusScraper.SOURCE] += 1
+                    elif listing.source == KamernetScraper.SOURCE:
                         attempted = await _enqueue_auto_reply_to_listing(
                             chat_id,
                             listing,
@@ -305,7 +341,12 @@ async def run_scan_for_user(
                         )
                         if attempted:
                             reply_attempts[RoofzScraper.SOURCE] += 1
-                elif listing.source in {KamernetScraper.SOURCE, FundaScraper.SOURCE, RoofzScraper.SOURCE}:
+                elif listing.source in {
+                    ParariusScraper.SOURCE,
+                    KamernetScraper.SOURCE,
+                    FundaScraper.SOURCE,
+                    RoofzScraper.SOURCE,
+                }:
                     await db.log_event(
                         "auto_reply_user_disabled",
                         chat_id=chat_id,
@@ -642,27 +683,38 @@ async def _maybe_auto_reply_to_listing(
             **_reply_timing_data(first_seen_at, result),
         },
     )
-    if bot and _should_warn_auto_reply(result.status, settings.dry_run):
-        await bot.send_message(
-            chat_id=chat_id,
-            text=(
-                f"Warning: {source_label} auto-reply needs attention for {listing.title}.\n"
-                f"Status: {result.status}\n"
-                f"Detail: {result.detail}\n"
-                f"Listing: {listing.url}"
-            ),
-            disable_web_page_preview=True,
-        )
-        await db.log_event(
-            "auto_reply_warning_sent",
-            level="warning",
-            chat_id=chat_id,
-            source=listing.source,
-            listing_id=listing.id,
-            title=listing.title,
-            status=result.status,
-            detail=result.detail,
-        )
+    if bot:
+        if _should_confirm_auto_reply(result.status, settings.dry_run):
+            await bot.send_message(
+                chat_id=chat_id,
+                text=_format_auto_reply_confirmation(source_label, listing, result),
+                disable_web_page_preview=True,
+            )
+            await db.log_event(
+                "auto_reply_confirmation_sent",
+                chat_id=chat_id,
+                source=listing.source,
+                listing_id=listing.id,
+                title=listing.title,
+                status=result.status,
+                detail=result.detail,
+            )
+        elif _should_warn_auto_reply(result.status, settings.dry_run):
+            await bot.send_message(
+                chat_id=chat_id,
+                text=_format_auto_reply_warning(source_label, listing, result),
+                disable_web_page_preview=True,
+            )
+            await db.log_event(
+                "auto_reply_warning_sent",
+                level="warning",
+                chat_id=chat_id,
+                source=listing.source,
+                listing_id=listing.id,
+                title=listing.title,
+                status=result.status,
+                detail=result.detail,
+            )
     return True
 
 
@@ -724,6 +776,85 @@ def _should_warn_auto_reply(status: str, dry_run: bool) -> bool:
     return status not in _AUTO_REPLY_OK_STATUSES
 
 
+def _should_confirm_auto_reply(status: str, dry_run: bool) -> bool:
+    if dry_run:
+        return False
+    return status in _AUTO_REPLY_CONFIRMATION_STATUSES
+
+
+def _format_auto_reply_confirmation(source_label: str, listing, result) -> str:
+    lines = [
+        "Auto-reply sent",
+        "",
+        f"Site: {source_label}",
+        f"Listing: {listing.title}",
+        f"Status: {_status_label(result.status)}",
+    ]
+    position = _extract_reply_position(result.detail)
+    if position:
+        lines.append(f"Position: {position}")
+    elif result.detail:
+        lines.append(f"Detail: {_compact_detail(result.detail)}")
+    lines.append(f"Link: {listing.url}")
+    return "\n".join(lines)
+
+
+def _format_auto_reply_warning(source_label: str, listing, result) -> str:
+    lines = [
+        "Auto-reply needs attention",
+        "",
+        f"Site: {source_label}",
+        f"Listing: {listing.title}",
+        f"Status: {_status_label(result.status)}",
+    ]
+    if result.detail:
+        lines.append(f"Problem: {_compact_detail(result.detail)}")
+    lines.extend(
+        [
+            "Action: check this listing manually.",
+            f"Link: {listing.url}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _extract_reply_position(detail: str) -> str:
+    match = re.search(r"#\s*\d+\s+(?:van|of)\s+\d+", detail or "", re.I)
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", match.group(0)).strip()
+
+
+def _status_label(status: str) -> str:
+    labels = {
+        "sent": "sent",
+        "submitted_unconfirmed": "submitted, confirmation pending",
+        "confirmation_confirmed": "confirmed",
+        "confirmation_missing": "confirmation missing",
+        "confirmation_error": "confirmation error",
+        "preapplication_confirmed": "pre-application confirmed",
+        "preapplication_sent": "pre-application sent",
+        "preapplication_confirmation_missing": "pre-application confirmation missing",
+        "sent_preapplication_pending": "pre-application pending",
+        "sent_preapplication_failed": "pre-application failed",
+        "needs_verification": "manual verification required",
+        "login_failed": "login failed",
+        "error": "error",
+    }
+    return labels.get(status, status.replace("_", " "))
+
+
+def _compact_detail(detail: str, limit: int = 900) -> str:
+    compact = re.sub(r"\s+", " ", detail or "").strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _source_label(source: str) -> str:
+    return SOURCE_LABELS.get(source, source.capitalize() if source else "Unknown")
+
+
 async def _scan_is_current(chat_id: int, user_filters: dict, require_active: bool) -> bool:
     latest_filters = await db.get_filters(chat_id)
     if not latest_filters or latest_filters.get("setup_in_progress"):
@@ -737,7 +868,7 @@ async def _scan_is_current(chat_id: int, user_filters: dict, require_active: boo
 
 
 async def _send_notification(bot: Bot, chat_id: int, listing) -> None:
-    source = listing.source.capitalize()
+    source = _source_label(listing.source)
     parts = [
         f"<b>{escape(listing.title)}</b>",
         f"Address: {escape(listing.address)}",
@@ -747,9 +878,10 @@ async def _send_notification(bot: Bot, chat_id: int, listing) -> None:
         parts.append(f"Bedrooms/rooms: {escape(listing.rooms)}")
     if listing.size_m2:
         parts.append(f"Size: {escape(listing.size_m2)}")
-    parts.append(f'\n<a href="{escape(listing.url)}">View listing</a>')
+    parts.append("")
+    parts.append(f'<a href="{escape(listing.url)}">Open listing</a>')
 
-    text = f"<b>New on {escape(source)}</b>\n\n" + "\n".join(parts)
+    text = f"<b>New {escape(source)} listing</b>\n\n" + "\n".join(parts)
 
     if listing.image_url:
         try:

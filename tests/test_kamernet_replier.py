@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-import scanner
-from kamernet_replier import (
+from housebot import scanner
+from housebot.kamernet_replier import (
     KamernetReplyResult,
     KamernetReplySettings,
     _SUCCESS_RE,
@@ -16,7 +16,7 @@ from kamernet_replier import (
     _normalize_text,
     should_skip_existing_reply,
 )
-from scrapers.base import Listing
+from housebot.scrapers.base import Listing
 
 
 def _settings(**overrides) -> KamernetReplySettings:
@@ -31,7 +31,7 @@ def _settings(**overrides) -> KamernetReplySettings:
         "max_per_scan": 1,
         "expected_tenancy_duration": "1 year",
         "expected_move_date": "07/01/2026",
-        "date_of_birth": "21-04-2003",
+        "date_of_birth": "01-01-2000",
         "expected_tenancy_duration_id": 0,
         "gender_id": 1,
         "status_id": 2,
@@ -95,7 +95,7 @@ class KamernetReplySettingsTests(unittest.TestCase):
 
     def test_kamernet_api_datetime_uses_expected_date_order(self):
         self.assertEqual(_kamernet_api_datetime("07/01/2026", prefer_month_first=True), "2026-07-01T20:00:00")
-        self.assertEqual(_kamernet_api_datetime("21-04-2003", prefer_month_first=False), "2003-04-21T20:00:00")
+        self.assertEqual(_kamernet_api_datetime("01-01-2000", prefer_month_first=False), "2000-01-01T20:00:00")
 
     def test_build_direct_api_payload_matches_captured_shape(self):
         payload, error = _build_direct_api_payload(_listing(), _settings())
@@ -107,7 +107,7 @@ class KamernetReplySettingsTests(unittest.TestCase):
                 "listingID": 2378731,
                 "message": "Hello, I am interested in this property.",
                 "genderID": 1,
-                "dateOfBirth": "2003-04-21T20:00:00",
+                "dateOfBirth": "2000-01-01T20:00:00",
                 "expectedTenancyDurationID": 3,
                 "statusID": 2,
                 "languagesSpokenID": [1, 2, 16],
@@ -136,6 +136,11 @@ class FakeReplier:
 class FakeWarningReplier(FakeReplier):
     async def reply_to_listing(self, listing):
         return KamernetReplyResult("confirmation_missing", "no mail")
+
+
+class FakeSentReplier(FakeReplier):
+    async def reply_to_listing(self, listing):
+        return KamernetReplyResult("sent", "Pararius reactions dashboard shows the reply (#65 van 305).")
 
 
 class FakeLoginFailedReplier(FakeReplier):
@@ -215,8 +220,10 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(attempted)
         bot.send_message.assert_awaited_once()
-        self.assertIn("confirmation_missing", bot.send_message.await_args.kwargs["text"])
-        self.assertIn(_listing().url, bot.send_message.await_args.kwargs["text"])
+        text = bot.send_message.await_args.kwargs["text"]
+        self.assertIn("Auto-reply needs attention", text)
+        self.assertIn("Status: confirmation missing", text)
+        self.assertIn(_listing().url, text)
 
     async def test_auto_reply_sends_warning_for_kamernet_login_failure(self):
         bot = AsyncMock()
@@ -240,7 +247,8 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(attempted)
         bot.send_message.assert_awaited_once()
         text = bot.send_message.await_args.kwargs["text"]
-        self.assertIn("login_failed", text)
+        self.assertIn("Auto-reply needs attention", text)
+        self.assertIn("Status: login failed", text)
         self.assertIn(_listing().url, text)
 
     async def test_auto_reply_does_not_warn_for_dry_run_result(self):
@@ -264,6 +272,41 @@ class KamernetScannerAutoReplyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(attempted)
         bot.send_message.assert_not_awaited()
+
+    async def test_auto_reply_sends_success_confirmation_for_live_sent_result(self):
+        bot = AsyncMock()
+        log_event = AsyncMock()
+        with (
+            patch.object(scanner.db, "get_auto_reply", AsyncMock(return_value=None)),
+            patch.object(scanner.db, "mark_auto_reply_result", AsyncMock()),
+            patch.object(scanner.db, "log_event", log_event),
+        ):
+            attempted = await scanner._maybe_auto_reply_to_listing(
+                123,
+                _listing(),
+                _settings(dry_run=False),
+                None,
+                attempts_so_far=0,
+                replier_cls=FakeSentReplier,
+                result_cls=KamernetReplyResult,
+                source_label="Pararius",
+                bot=bot,
+            )
+
+        self.assertTrue(attempted)
+        bot.send_message.assert_awaited_once()
+        text = bot.send_message.await_args.kwargs["text"]
+        self.assertIn("Auto-reply sent", text)
+        self.assertIn("Site: Pararius", text)
+        self.assertIn(_listing().title, text)
+        self.assertIn("Position: #65 van 305", text)
+        self.assertIn(_listing().url, text)
+        self.assertTrue(
+            any(
+                call.args and call.args[0] == "auto_reply_confirmation_sent"
+                for call in log_event.await_args_list
+            )
+        )
 
 
 if __name__ == "__main__":

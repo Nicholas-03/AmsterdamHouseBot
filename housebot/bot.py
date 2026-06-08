@@ -15,22 +15,24 @@ from telegram.ext import (
     filters,
 )
 
-from auto_reply_queue import AUTO_REPLY_QUEUE
-import config
-import db
-from funda_replier import FundaReplySettings
-from kamernet_replier import KamernetReplySettings
-from notification_sources import ALL_SOURCES, SOURCE_LABELS, format_sources, normalize_sources, parse_source_tokens
-from roofz_mailbox_monitor import find_new_complete_application_emails, mark_complete_application_email_seen
-from roofz_replier import RoofzReplier, RoofzReplySettings
-from scanner import run_scan_for_user
-from scrapers.base import Listing
-from scrapers.kamernet import (
+from housebot.auto_reply_queue import AUTO_REPLY_QUEUE
+from housebot import config
+from housebot import db
+from housebot.funda_replier import FundaReplySettings
+from housebot.kamernet_replier import KamernetReplySettings
+from housebot.notification_sources import ALL_SOURCES, SOURCE_LABELS, format_sources, normalize_sources, parse_source_tokens
+from housebot.pararius_replier import ParariusReplySettings
+from housebot.roofz_complete_application import RoofzCompleteApplicationCompleter, RoofzCompleteApplicationSettings
+from housebot.roofz_mailbox_monitor import find_new_complete_application_emails, mark_complete_application_email_seen
+from housebot.roofz_replier import RoofzReplier, RoofzReplySettings
+from housebot.scanner import run_scan_for_user
+from housebot.scrapers.base import Listing
+from housebot.scrapers.kamernet import (
     KAMERNET_PROPERTY_TYPE_LABELS,
     format_kamernet_property_types,
     serialize_kamernet_property_types,
 )
-from source_health import SOURCE_HEALTH
+from housebot.source_health import SOURCE_HEALTH
 
 logger = logging.getLogger(__name__)
 _SCAN_LOCK = asyncio.Lock()
@@ -261,8 +263,9 @@ async def health_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     users = await _get_active_allowed_users()
     text = (
-        "Warning: Amsterdam House Bot has not completed a scan recently.\n"
-        f"Last completed scan: {_format_age(scan_age_seconds)} ago.\n"
+        "Bot health warning\n\n"
+        "Status: no recent completed scan\n"
+        f"Last completed scan: {_format_age(scan_age_seconds)} ago\n"
         "I will keep trying, but the server may need attention."
     )
     for user in users:
@@ -309,6 +312,8 @@ async def roofz_complete_application_watchdog(context: ContextTypes.DEFAULT_TYPE
     if not messages:
         return
 
+    complete_settings = RoofzCompleteApplicationSettings.from_config()
+    complete_ready_error = complete_settings.ready_error()
     users = [
         user
         for user in await _get_active_allowed_users()
@@ -316,7 +321,7 @@ async def roofz_complete_application_watchdog(context: ContextTypes.DEFAULT_TYPE
     ]
     for message in messages:
         if await db.bot_event_exists(
-            "roofz_complete_application_detected",
+            "roofz_complete_application_result",
             source="roofz",
             listing_id=message.message_id,
         ):
@@ -340,16 +345,54 @@ async def roofz_complete_application_watchdog(context: ContextTypes.DEFAULT_TYPE
                 "links": list(message.links[:3]),
             },
         )
-        if not users:
-            continue
-
         link_text = message.links[0] if message.links else "No application link detected in the email."
-        text = (
-            "Roofz complete application email arrived.\n\n"
-            f"Listing: {message.listing_title}\n"
-            "This step usually requires document uploads, so I am not submitting it automatically.\n\n"
-            f"Link: {link_text}"
+        if not message.links:
+            result_status = "complete_application_missing_link"
+            result_detail = "No complete-application link was detected in the email."
+        elif complete_ready_error:
+            result_status = "complete_application_not_ready"
+            result_detail = complete_ready_error
+        else:
+            try:
+                result = await RoofzCompleteApplicationCompleter(complete_settings).complete_application(message.links[0])
+                result_status = result.status
+                result_detail = result.detail
+            except Exception as exc:
+                logger.exception("Roofz complete-application submit failed for %s", message.listing_title)
+                result_status = "complete_application_error"
+                result_detail = str(exc)
+
+        result_ok = _roofz_complete_application_status_ok(result_status)
+        await db.log_event(
+            "roofz_complete_application_result",
+            level="info" if result_ok else "warning",
+            source="roofz",
+            listing_id=message.message_id,
+            title=message.listing_title,
+            status=result_status,
+            detail=result_detail,
+            data={
+                "sender": message.sender,
+                "link": message.links[0] if message.links else None,
+            },
         )
+
+        if result_ok:
+            text = _format_roofz_complete_application_message(
+                message.listing_title,
+                result_status,
+                result_detail,
+                ok=True,
+            )
+        else:
+            text = _format_roofz_complete_application_message(
+                message.listing_title,
+                result_status,
+                result_detail,
+                ok=False,
+                link=link_text,
+            )
+
         notified_users = 0
         for user in users:
             await context.bot.send_message(
@@ -363,13 +406,14 @@ async def roofz_complete_application_watchdog(context: ContextTypes.DEFAULT_TYPE
             source="roofz",
             listing_id=message.message_id,
             title=message.listing_title,
-            status="sent",
-            data={"notified_users": notified_users},
+            status=result_status,
+            data={"notified_users": notified_users, "result_ok": result_ok},
         )
-        try:
-            await mark_complete_application_email_seen(message.message_id)
-        except Exception as exc:
-            logger.warning("Could not mark Roofz complete-application email seen: %s", exc)
+        if result_ok or notified_users:
+            try:
+                await mark_complete_application_email_seen(message.message_id)
+            except Exception as exc:
+                logger.warning("Could not mark Roofz complete-application email seen: %s", exc)
 
 
 async def roofz_preapplication_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -460,12 +504,7 @@ async def roofz_preapplication_watchdog(context: ContextTypes.DEFAULT_TYPE) -> N
             if _auto_reply_status_ok(result.status):
                 continue
 
-            text = (
-                f"Warning: Roofz pre-application needs attention for {listing.title}.\n"
-                f"Status: {result.status}\n"
-                f"Detail: {result.detail}\n"
-                f"Listing: {listing.url}"
-            )
+            text = _format_roofz_preapplication_warning(listing, result)
             for user in users:
                 await context.bot.send_message(
                     chat_id=user["chat_id"],
@@ -1049,7 +1088,7 @@ async def _send_help(update: Update) -> None:
         "/search - set Kamernet property types, rent, bedrooms, and size filters\n"
         "/filters - show active filters\n"
         "/sources on|off|only|all|status - control which sites send notifications\n"
-        "/autoreply on|off|status - control Kamernet/Funda/Roofz auto-replies\n"
+        "/autoreply on|off|status - control Pararius/Kamernet/Funda/Roofz auto-replies\n"
         "/logs - show recent operational events\n"
         "/test - scan now\n"
         "/pause - pause notifications\n"
@@ -1214,6 +1253,7 @@ def _format_auto_reply_status(user_filters: dict) -> str:
 
 def _auto_reply_source_status() -> list[tuple[str, str | None]]:
     return [
+        ("Pararius", ParariusReplySettings.from_config().ready_error()),
         ("Kamernet", KamernetReplySettings.from_config().ready_error()),
         ("Funda", FundaReplySettings.from_config().ready_error()),
         ("Roofz", RoofzReplySettings.from_config().ready_error()),
@@ -1322,7 +1362,7 @@ def _format_daily_summary_text(
 ) -> str:
     lines = [
         "Daily housing summary",
-        "Last 24h",
+        "Period: last 24h",
         "",
         "New listings",
         *_format_daily_count_lines(listing_counts),
@@ -1339,6 +1379,64 @@ def _format_daily_summary_text(
         + (_format_age(scan_age) + " ago" if scan_age is not None else "never recorded"),
     ]
     return "\n".join(lines)
+
+
+def _format_roofz_complete_application_message(
+    listing_title: str,
+    status: str,
+    detail: str,
+    *,
+    ok: bool,
+    link: str = "",
+) -> str:
+    if ok:
+        lines = [
+            "Roofz complete application completed",
+            "",
+            f"Listing: {listing_title}",
+            f"Status: {_auto_reply_status_label(status, 1)}",
+        ]
+        if detail:
+            lines.append(f"Detail: {_compact_message_detail(detail)}")
+        return "\n".join(lines)
+
+    lines = [
+        "Roofz complete application needs attention",
+        "",
+        f"Listing: {listing_title}",
+        f"Status: {_auto_reply_status_label(status, 1)}",
+    ]
+    if detail:
+        lines.append(f"Problem: {_compact_message_detail(detail)}")
+    if link:
+        lines.append(f"Link: {link}")
+    lines.append("Action: complete or verify this application manually.")
+    return "\n".join(lines)
+
+
+def _format_roofz_preapplication_warning(listing: Listing, result) -> str:
+    lines = [
+        "Roofz pre-application needs attention",
+        "",
+        f"Listing: {listing.title}",
+        f"Status: {_auto_reply_status_label(result.status, 1)}",
+    ]
+    if result.detail:
+        lines.append(f"Problem: {_compact_message_detail(result.detail)}")
+    lines.extend(
+        [
+            "Action: check this listing manually.",
+            f"Link: {listing.url}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _compact_message_detail(detail: str, limit: int = 900) -> str:
+    compact = " ".join(str(detail or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _format_daily_count_lines(rows: list[dict]) -> list[str]:
@@ -1381,6 +1479,18 @@ def _auto_reply_status_label(status: str, count: int) -> str:
         "preapplication_confirmation_missing": "pre-application confirmation missing",
         "sent_preapplication_pending": "pre-application pending",
         "sent_preapplication_failed": "pre-application failed",
+        "complete_application_sent": "completed",
+        "complete_application_dry_run_ready": "complete application ready, dry run",
+        "complete_application_missing_link": "application link missing",
+        "complete_application_not_ready": "complete application not ready",
+        "complete_application_error": "complete application error",
+        "complete_application_api_error": "complete application API error",
+        "complete_application_update_failed": "application update failed",
+        "complete_application_finalize_failed": "application finalize failed",
+        "complete_application_pending_verification": "pending verification",
+        "complete_application_validation_failed": "validation failed",
+        "complete_application_browser_error": "browser fallback error",
+        "complete_application_browser_timeout": "browser fallback timeout",
         "needs_verification": "needs verification",
         "login_failed": "login failed",
         "error": "error",
@@ -1419,6 +1529,14 @@ def _auto_reply_status_ok(status: str) -> bool:
         "confirmation_confirmed",
         "preapplication_confirmed",
         "preapplication_sent",
+        "complete_application_sent",
+    }
+
+
+def _roofz_complete_application_status_ok(status: str) -> bool:
+    return status in {
+        "complete_application_sent",
+        "complete_application_dry_run_ready",
     }
 
 

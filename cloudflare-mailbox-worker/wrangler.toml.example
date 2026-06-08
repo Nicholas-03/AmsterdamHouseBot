@@ -5,7 +5,7 @@ compatibility_date = "2026-05-28"
 workers_dev = true
 
 [vars]
-MAILBOX_ADDRESS = "housing@nicholasboidi.tech"
+MAILBOX_ADDRESS = "housing@example.com"
 MAILBOX_RETENTION_DAYS = "14"
 # Optional: forward a human-readable copy after saving it for the bot.
 # FORWARD_TO = "you@example.com"

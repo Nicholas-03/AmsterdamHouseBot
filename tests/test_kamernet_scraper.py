@@ -2,8 +2,8 @@ import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from scrapers.base import Listing
-from scrapers.kamernet import KamernetScraper
+from housebot.scrapers.base import Listing
+from housebot.scrapers.kamernet import KamernetScraper
 
 
 def _listing(address: str) -> Listing:
@@ -64,8 +64,8 @@ class KamernetScrapeFetchTests(unittest.IsolatedAsyncioTestCase):
         html = f"<html><script id='__NEXT_DATA__'>{json.dumps(next_data)}</script></html>"
 
         with (
-            patch("scrapers.kamernet.fetch_html", AsyncMock(return_value=html)) as fetch_html,
-            patch("scrapers.kamernet.asyncio.sleep", AsyncMock()),
+            patch("housebot.scrapers.kamernet.fetch_html", AsyncMock(return_value=html)) as fetch_html,
+            patch("housebot.scrapers.kamernet.asyncio.sleep", AsyncMock()),
         ):
             listings = await KamernetScraper(city="Amsterdam", max_price=1500).scrape()
 

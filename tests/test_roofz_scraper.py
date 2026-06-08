@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from scrapers.roofz import RoofzScraper
+from housebot.scrapers.roofz import RoofzScraper
 
 
 class RoofzScraperTests(unittest.TestCase):
@@ -98,7 +98,7 @@ class RoofzNavigationTests(unittest.IsolatedAsyncioTestCase):
                     raise RuntimeError("temporary timeout")
 
         page = FakePage()
-        with patch("scrapers.roofz.asyncio.sleep", AsyncMock()) as sleep:
+        with patch("housebot.scrapers.roofz.asyncio.sleep", AsyncMock()) as sleep:
             await RoofzScraper()._goto_with_retries(page, "https://www.roofz.eu/huur/woningen")
 
         self.assertEqual(page.attempts, 2)

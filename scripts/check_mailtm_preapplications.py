@@ -5,13 +5,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from cloudflare_mailbox import CloudflareMailboxClient
-from mailtm_preapplication import (
+from housebot.cloudflare_mailbox import CloudflareMailboxClient
+from housebot.mailtm_preapplication import (
     MailTmClient,
     find_confirmation_messages,
     find_preapplication_messages,
 )
-from roofz_replier import RoofzReplySettings
+from housebot.roofz_replier import RoofzReplySettings
 
 
 def main() -> int:

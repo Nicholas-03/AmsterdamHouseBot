@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-from scrapers import _resilient_fetch
+from housebot.scrapers import _resilient_fetch
 
 
 class _FakeResponse:

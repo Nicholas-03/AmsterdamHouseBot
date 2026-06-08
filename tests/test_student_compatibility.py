@@ -1,9 +1,9 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from scrapers.huurwoningen import HuurwoningenScraper
-from scrapers.pararius import ParariusScraper
-from scrapers.student_compatibility import html_to_search_text, is_student_compatible_text
+from housebot.scrapers.huurwoningen import HuurwoningenScraper
+from housebot.scrapers.pararius import ParariusScraper
+from housebot.scrapers.student_compatibility import html_to_search_text, is_student_compatible_text
 
 
 class StudentCompatibilityTextTests(unittest.TestCase):
@@ -56,9 +56,9 @@ class StudentCompatibilityScraperTests(unittest.IsolatedAsyncioTestCase):
             return "<main>Not suitable for students.</main>"
 
         with (
-            patch("scrapers.pararius.fetch_html", AsyncMock(return_value=search_html)),
-            patch("scrapers.pararius.asyncio.sleep", AsyncMock()),
-            patch("scrapers.student_compatibility.fetch_html", detail_fetch),
+            patch("housebot.scrapers.pararius.fetch_html", AsyncMock(return_value=search_html)),
+            patch("housebot.scrapers.pararius.asyncio.sleep", AsyncMock()),
+            patch("housebot.scrapers.student_compatibility.fetch_html", detail_fetch),
         ):
             listings = await ParariusScraper(max_price=1500, min_bedrooms=0).scrape()
 
@@ -86,9 +86,9 @@ class StudentCompatibilityScraperTests(unittest.IsolatedAsyncioTestCase):
             return "<main>No students. No guarantors.</main>"
 
         with (
-            patch("scrapers.huurwoningen.fetch_html", AsyncMock(return_value=search_html)),
-            patch("scrapers.huurwoningen.asyncio.sleep", AsyncMock()),
-            patch("scrapers.student_compatibility.fetch_html", detail_fetch),
+            patch("housebot.scrapers.huurwoningen.fetch_html", AsyncMock(return_value=search_html)),
+            patch("housebot.scrapers.huurwoningen.asyncio.sleep", AsyncMock()),
+            patch("housebot.scrapers.student_compatibility.fetch_html", detail_fetch),
         ):
             listings = await HuurwoningenScraper(max_price=1500, min_bedrooms=0).scrape()
 

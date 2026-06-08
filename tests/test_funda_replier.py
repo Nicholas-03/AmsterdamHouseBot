@@ -3,16 +3,16 @@ import unittest
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
-from funda_replier import (
+from housebot.funda_replier import (
     FundaConfirmationSettings,
     FundaReplier,
     FundaReplySettings,
     _build_contact_payload,
     find_funda_confirmation_messages,
 )
-from cloudflare_mailbox import CloudflareMailboxAuthSettings
-from mailtm_preapplication import MailTmAuthSettings
-from scrapers.base import Listing
+from housebot.cloudflare_mailbox import CloudflareMailboxAuthSettings
+from housebot.mailtm_preapplication import MailTmAuthSettings
+from housebot.scrapers.base import Listing
 
 
 def _confirmation(**overrides) -> FundaConfirmationSettings:
@@ -44,8 +44,8 @@ def _settings(**overrides) -> FundaReplySettings:
         "enabled": True,
         "dry_run": True,
         "email": "tenant@example.com",
-        "first_name": "Nicholas",
-        "last_name": "Boidi",
+        "first_name": "Alex",
+        "last_name": "Tenant",
         "phone_number": "+391234567890",
         "message": "Dear property manager\n\nI am interested in this property.",
         "max_per_scan": 1,
@@ -95,8 +95,8 @@ class FundaReplySettingsTests(unittest.TestCase):
     def test_build_contact_payload_matches_funda_contact_api_shape(self):
         payload = _build_contact_payload(_settings())
 
-        self.assertEqual(payload["firstName"], "Nicholas")
-        self.assertEqual(payload["lastName"], "Boidi")
+        self.assertEqual(payload["firstName"], "Alex")
+        self.assertEqual(payload["lastName"], "Tenant")
         self.assertEqual(payload["emailAddress"], "tenant@example.com")
         self.assertEqual(payload["phoneNumber"], "+391234567890")
         self.assertEqual(payload["days"], [])

@@ -4,10 +4,10 @@ import asyncio
 import re
 from dataclasses import dataclass
 
-import config
-from cloudflare_mailbox import CloudflareMailboxClient
-from mailtm_preapplication import MailTmClient, find_complete_application_messages
-from roofz_replier import RoofzReplySettings
+from housebot import config
+from housebot.cloudflare_mailbox import CloudflareMailboxClient
+from housebot.mailtm_preapplication import MailTmClient, find_complete_application_messages
+from housebot.roofz_replier import RoofzReplySettings
 
 
 @dataclass(frozen=True)
@@ -19,8 +19,8 @@ class RoofzCompleteApplicationEmail:
 
     @property
     def listing_title(self) -> str:
-        subject = re.sub(r"^\\s*(?:fwd?:\\s*)+", "", self.subject, flags=re.I).strip()
-        match = re.search(r"complete application for\\s+(.+)$", subject, flags=re.I)
+        subject = re.sub(r"^\s*(?:fwd?:\s*)+", "", self.subject, flags=re.I).strip()
+        match = re.search(r"complete application for\s+(.+)$", subject, flags=re.I)
         return match.group(1).strip().rstrip(".") if match else subject
 
 

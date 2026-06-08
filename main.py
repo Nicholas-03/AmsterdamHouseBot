@@ -2,7 +2,7 @@ import logging
 import socket
 import sys
 
-from bot import create_application
+from housebot.bot import create_application
 
 logging.basicConfig(
     level=logging.INFO,

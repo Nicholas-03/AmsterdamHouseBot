@@ -9,6 +9,7 @@ APP_DIR="/opt/${APP_NAME}"
 ENV_DIR="/etc/${APP_NAME}"
 ENV_FILE="${ENV_DIR}/bot.env"
 DATA_DIR="/var/lib/${APP_NAME}"
+DOCUMENTS_DIR="${DATA_DIR}/roofz-documents"
 DB_PATH="${DATA_DIR}/listings.db"
 LEGACY_DB_PATH="${APP_DIR}/listings.db"
 UV_BIN="/usr/local/bin/uv"
@@ -19,6 +20,7 @@ SERVICE_ENV=("HOME=${SERVICE_HOME}" "XDG_CACHE_HOME=${SERVICE_HOME}/.cache")
 
 ARCHIVE_PATH="${1:-}"
 UPLOADED_ENV="${2:-}"
+DOCUMENTS_ARCHIVE="${3:-}"
 STAGING_DIR="/tmp/${APP_NAME}-release"
 
 log() {
@@ -119,6 +121,19 @@ awk '!/^[[:space:]]*DB_PATH[[:space:]]*=/' "${UPLOADED_ENV}" > "${SANITIZED_ENV}
 install -m 0640 -o root -g "${SERVICE_USER}" "${SANITIZED_ENV}" "${ENV_FILE}"
 rm -f "${SANITIZED_ENV}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${DATA_DIR}"
+if [[ -n "${DOCUMENTS_ARCHIVE}" ]]; then
+    if [[ ! -f "${DOCUMENTS_ARCHIVE}" ]]; then
+        echo "Roofz document archive not found: ${DOCUMENTS_ARCHIVE}" >&2
+        exit 1
+    fi
+    log "Installing Roofz application documents"
+    rm -rf "${DOCUMENTS_DIR}"
+    install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${DOCUMENTS_DIR}"
+    unzip -q "${DOCUMENTS_ARCHIVE}" -d "${DOCUMENTS_DIR}"
+    chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DOCUMENTS_DIR}"
+    find "${DOCUMENTS_DIR}" -type d -exec chmod 0750 {} +
+    find "${DOCUMENTS_DIR}" -type f -exec chmod 0640 {} +
+fi
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${SERVICE_HOME}/.cache"
 
@@ -151,5 +166,8 @@ else
     exit 1
 fi
 
+if [[ -n "${DOCUMENTS_ARCHIVE}" ]]; then
+    rm -f "${DOCUMENTS_ARCHIVE}"
+fi
 rm -rf "${STAGING_DIR}" "${ARCHIVE_PATH}" "${UPLOADED_ENV}"
 log "Bootstrap complete"

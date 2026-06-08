@@ -12,6 +12,14 @@ class MailboxViewerHtmlTests(unittest.TestCase):
         self.assertIn("min-height: 66px;", html)
         self.assertIn('id="list-status"', html)
 
+    def test_opening_an_email_marks_it_seen(self):
+        html = _index_html("housing@example.test")
+
+        self.assertIn("async function markMessageSeen(id", html)
+        self.assertIn("if (!selectedMessage.seen)", html)
+        self.assertIn("await markMessageSeen(id)", html)
+        self.assertIn("await markMessageSeen(selectedId)", html)
+
 
 if __name__ == "__main__":
     unittest.main()

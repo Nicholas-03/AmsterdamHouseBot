@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from cloudflare_mailbox import CloudflareMailboxAuthSettings, CloudflareMailboxClient
+from housebot.cloudflare_mailbox import CloudflareMailboxAuthSettings, CloudflareMailboxClient
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -562,19 +562,30 @@ def _index_html(address: str) -> str:
         selectedMessage = await requestJson(`/api/messages/${{encodeURIComponent(id)}}`);
         activeTab = selectedMessage.display_html ? "html" : "text";
         renderDetail();
+        if (!selectedMessage.seen) {{
+          try {{
+            await markMessageSeen(id);
+          }} catch (error) {{
+            console.warn("Could not mark email as seen", error);
+          }}
+        }}
       }} catch (error) {{
         document.getElementById("detail").innerHTML = `<div class="empty error">${{escapeHtml(error.message)}}</div>`;
       }}
     }}
 
+    async function markMessageSeen(id, {{ updateDetail = true }} = {{}}) {{
+      await requestJson(`/api/messages/${{encodeURIComponent(id)}}/seen`, {{ method: "POST" }});
+      const item = messages.find((message) => message.id === id);
+      if (item) item.seen = true;
+      if (selectedId === id && selectedMessage) selectedMessage.seen = true;
+      renderList();
+      if (updateDetail && selectedId === id) renderDetail();
+    }}
+
     async function markSeen() {{
       if (!selectedId) return;
-      await requestJson(`/api/messages/${{encodeURIComponent(selectedId)}}/seen`, {{ method: "POST" }});
-      const item = messages.find((message) => message.id === selectedId);
-      if (item) item.seen = true;
-      if (selectedMessage) selectedMessage.seen = true;
-      renderList();
-      renderDetail();
+      await markMessageSeen(selectedId);
     }}
 
     function setTab(tab) {{

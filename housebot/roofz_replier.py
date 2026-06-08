@@ -11,14 +11,14 @@ from urllib.parse import urlparse
 import httpx
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
 
-from cloudflare_mailbox import CloudflareMailboxClient, CloudflareMailboxSettings
-from mailtm_preapplication import (
+from housebot.cloudflare_mailbox import CloudflareMailboxClient, CloudflareMailboxSettings
+from housebot.mailtm_preapplication import (
     MailTmClient,
     MailTmSettings,
     find_confirmation_messages,
     find_preapplication_messages,
 )
-from scrapers.base import Listing
+from housebot.scrapers.base import Listing
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class RoofzReplySettings:
 
     @classmethod
     def from_config(cls) -> RoofzReplySettings:
-        import config
+        from housebot import config
 
         return cls(
             enabled=config.ROOFZ_AUTO_REPLY_ENABLED,
