@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from pathlib import Path
 import sys
 from dotenv import load_dotenv
@@ -69,6 +70,37 @@ def _getenv_fallback(name: str, fallback: str = "") -> str:
     if value is None:
         return fallback
     return value
+
+
+def _derive_initials(first_name: str, last_name: str) -> str:
+    tokens = [token for token in first_name.replace("-", " ").split() if token]
+    if len(tokens) < 2:
+        tokens.extend(token for token in last_name.replace("-", " ").split() if token)
+    initials = [token[0].upper() for token in tokens[:2] if token]
+    return ".".join(initials) + "." if initials else ""
+
+
+def _derive_age(birth_date: str, today: date | None = None) -> str:
+    raw = birth_date.strip()
+    if not raw:
+        return ""
+
+    for separator in ("-", "/"):
+        parts = raw.split(separator)
+        if len(parts) != 3:
+            continue
+        try:
+            if len(parts[0]) == 4:
+                born = date(int(parts[0]), int(parts[1]), int(parts[2]))
+            else:
+                born = date(int(parts[2]), int(parts[1]), int(parts[0]))
+        except ValueError:
+            continue
+        current = today or date.today()
+        age = current.year - born.year - ((current.month, current.day) < (born.month, born.day))
+        return str(age) if age >= 0 else ""
+
+    return ""
 
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
@@ -167,8 +199,8 @@ ROOFZ_MAILBOX_PROVIDER = os.getenv("ROOFZ_MAILBOX_PROVIDER", MAILBOX_PROVIDER).s
 FUNDA_AUTO_REPLY_ENABLED = _parse_bool(os.getenv("FUNDA_AUTO_REPLY_ENABLED"), False)
 FUNDA_REPLY_DRY_RUN = _parse_bool(os.getenv("FUNDA_REPLY_DRY_RUN"), KAMERNET_REPLY_DRY_RUN)
 FUNDA_EMAIL = _getenv_fallback("FUNDA_EMAIL", HOUSING_EMAIL or KAMERNET_EMAIL).strip()
-FUNDA_FIRST_NAME = os.getenv("FUNDA_FIRST_NAME", "").strip()
-FUNDA_LAST_NAME = os.getenv("FUNDA_LAST_NAME", "").strip()
+FUNDA_FIRST_NAME = os.getenv("FUNDA_FIRST_NAME", os.getenv("ROOFZ_FIRST_NAME", "")).strip()
+FUNDA_LAST_NAME = os.getenv("FUNDA_LAST_NAME", os.getenv("ROOFZ_LAST_NAME", "")).strip()
 FUNDA_PHONE_NUMBER = os.getenv("FUNDA_PHONE_NUMBER", "").strip()
 FUNDA_REPLY_MESSAGE = _load_reply_message("FUNDA", KAMERNET_REPLY_MESSAGE)
 FUNDA_REPLY_MAX_PER_SCAN = _parse_non_negative_int(os.getenv("FUNDA_REPLY_MAX_PER_SCAN"), 0)
@@ -373,7 +405,7 @@ ROOFZ_OSRE_API_BASE = os.getenv(
     "ROOFZ_OSRE_API_BASE",
     "https://relet.portal.prd.osre.eu",
 ).rstrip("/")
-ROOFZ_INITIALS = os.getenv("ROOFZ_INITIALS", "").strip()
+ROOFZ_INITIALS = os.getenv("ROOFZ_INITIALS", _derive_initials(ROOFZ_FIRST_NAME, ROOFZ_LAST_NAME)).strip()
 ROOFZ_BIRTH_DATE = os.getenv("ROOFZ_BIRTH_DATE", "").strip()
 ROOFZ_RENT_TOGETHER = _parse_bool(os.getenv("ROOFZ_RENT_TOGETHER"), False)
 ROOFZ_CURRENT_LIVING_SITUATION = os.getenv("ROOFZ_CURRENT_LIVING_SITUATION", "Single without children").strip()
@@ -385,7 +417,7 @@ ROOFZ_BANK_NAME = os.getenv("ROOFZ_BANK_NAME", "").strip()
 ROOFZ_EXPECTED_STAY_DURATION = os.getenv("ROOFZ_EXPECTED_STAY_DURATION", "1 year").strip()
 ROOFZ_EXPECTED_MOVE_DATE = os.getenv("ROOFZ_EXPECTED_MOVE_DATE", "01/07/2026").strip()
 ROOFZ_GENDER = os.getenv("ROOFZ_GENDER", "Male").strip()
-ROOFZ_AGE = os.getenv("ROOFZ_AGE", "").strip()
+ROOFZ_AGE = os.getenv("ROOFZ_AGE", _derive_age(ROOFZ_BIRTH_DATE)).strip()
 ROOFZ_OCCUPATION = os.getenv("ROOFZ_OCCUPATION", "Student").strip()
 ROOFZ_LANGUAGES = os.getenv("ROOFZ_LANGUAGES", "English").strip()
 ROOFZ_PETS = os.getenv("ROOFZ_PETS", "No").strip()

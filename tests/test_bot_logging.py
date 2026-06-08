@@ -73,7 +73,7 @@ class BotLoggingTests(unittest.IsolatedAsyncioTestCase):
             "first_seen_at": "2026-06-02 08:59:00",
         }
         log_event = AsyncMock()
-        context = SimpleNamespace(bot=AsyncMock())
+        context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=456))))
 
         with (
             patch.object(bot.config, "ROOFZ_PREAPPLICATION_MONITOR_ENABLED", True),
@@ -103,7 +103,7 @@ class BotLoggingTests(unittest.IsolatedAsyncioTestCase):
         )
         log_event = AsyncMock()
         mark_seen = AsyncMock()
-        context = SimpleNamespace(bot=AsyncMock())
+        context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=456))))
         completed = []
 
         class ReadySettings:
@@ -139,6 +139,15 @@ class BotLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed, ["https://roofz.onosre.com/application/abc"])
         context.bot.send_message.assert_awaited_once()
         self.assertIn("completed", context.bot.send_message.await_args.kwargs["text"].casefold())
+        self.assertTrue(
+            any(
+                call.args
+                and call.args[0] == "roofz_complete_application_notification_user_sent"
+                and call.kwargs["chat_id"] == 123
+                and call.kwargs["data"]["message_id"] == 456
+                for call in log_event.await_args_list
+            )
+        )
         mark_seen.assert_awaited_once_with("message-1")
 
 

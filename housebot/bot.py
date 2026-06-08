@@ -394,20 +394,32 @@ async def roofz_complete_application_watchdog(context: ContextTypes.DEFAULT_TYPE
             )
 
         notified_users = 0
+        recipients = []
         for user in users:
-            await context.bot.send_message(
+            sent_message = await context.bot.send_message(
                 chat_id=user["chat_id"],
                 text=text,
                 disable_web_page_preview=True,
             )
             notified_users += 1
+            message_id = getattr(sent_message, "message_id", None)
+            recipients.append({"chat_id": user["chat_id"], "message_id": message_id})
+            await db.log_event(
+                "roofz_complete_application_notification_user_sent",
+                source="roofz",
+                chat_id=user["chat_id"],
+                listing_id=message.message_id,
+                title=message.listing_title,
+                status=result_status,
+                data={"message_id": message_id, "result_ok": result_ok},
+            )
         await db.log_event(
             "roofz_complete_application_notification_sent",
             source="roofz",
             listing_id=message.message_id,
             title=message.listing_title,
             status=result_status,
-            data={"notified_users": notified_users, "result_ok": result_ok},
+            data={"notified_users": notified_users, "result_ok": result_ok, "recipients": recipients},
         )
         if result_ok or notified_users:
             try:
