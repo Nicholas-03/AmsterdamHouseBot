@@ -63,6 +63,20 @@ class CloudflareMailboxTests(unittest.TestCase):
         self.assertEqual(message["forward"]["status"], "failed")
         self.assertEqual(message["forward"]["to"], "person@example.com")
 
+    def test_preserves_worker_extracted_links(self):
+        message = _normalize_full_message(
+            {
+                "id": "abc",
+                "subject": "Links",
+                "links": ["https://www.pararius.com/apartment-for-rent/amsterdam/26928668/kraanspoor"],
+            }
+        )
+
+        self.assertEqual(
+            message["links"],
+            ["https://www.pararius.com/apartment-for-rent/amsterdam/26928668/kraanspoor"],
+        )
+
     def test_recovers_missing_subject_from_raw_mime(self):
         message = _normalize_full_message(
             {

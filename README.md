@@ -8,6 +8,7 @@ Telegram bot for Amsterdam rental hunting. It scans rental sites, sends matching
 - Sends Telegram notifications for new listings.
 - Supports per-site notification toggles.
 - Supports auto-replies for Kamernet, Funda, Pararius, and Roofz.
+- Reads forwarded Pararius+ alert emails from the housing mailbox and sends them as Pararius notifications.
 - Completes Roofz pre-applications and full OSRE applications through API first, with browser fallback.
 - Tracks operational events, reply latency, and confirmation latency in SQLite.
 - Prunes operational logs older than 3 days.
@@ -155,6 +156,7 @@ ssh root@134.122.56.43 "docker ps"
 - Source-specific failures are logged in `bot_events`.
 - Auto-reply state is stored in `auto_replies`.
 - Roofz full-application emails must arrive in the configured housing mailbox. The bot does not read Gmail directly.
+- Pararius+ alert emails are processed only when the email content contains `Pararius+`; normal Pararius emails are ignored by that monitor.
 - Kamernet may require manual verification; those cases are reported in Telegram.
 - Pararius may be blocked by Cloudflare in headless production; browser/session quality matters.
 

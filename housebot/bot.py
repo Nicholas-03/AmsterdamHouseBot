@@ -21,10 +21,15 @@ from housebot import db
 from housebot.funda_replier import FundaReplySettings
 from housebot.kamernet_replier import KamernetReplySettings
 from housebot.notification_sources import ALL_SOURCES, SOURCE_LABELS, format_sources, normalize_sources, parse_source_tokens
-from housebot.pararius_replier import ParariusReplySettings
+from housebot.pararius_alert_mailbox import (
+    find_new_pararius_plus_alert_emails,
+    mark_pararius_plus_alert_email_seen,
+)
+from housebot.pararius_replier import ParariusReplier, ParariusReplyResult, ParariusReplySettings
 from housebot.roofz_complete_application import RoofzCompleteApplicationCompleter, RoofzCompleteApplicationSettings
 from housebot.roofz_mailbox_monitor import find_new_complete_application_emails, mark_complete_application_email_seen
 from housebot.roofz_replier import RoofzReplier, RoofzReplySettings
+from housebot import scanner as scanner_module
 from housebot.scanner import run_scan_for_user
 from housebot.scrapers.base import Listing
 from housebot.scrapers.kamernet import (
@@ -32,6 +37,7 @@ from housebot.scrapers.kamernet import (
     format_kamernet_property_types,
     serialize_kamernet_property_types,
 )
+from housebot.scrapers.pararius import ParariusScraper
 from housebot.source_health import SOURCE_HEALTH
 
 logger = logging.getLogger(__name__)
@@ -147,6 +153,16 @@ def create_application() -> Application:
             roofz_preapplication_watchdog,
             interval=config.ROOFZ_PREAPPLICATION_MONITOR_INTERVAL_SECONDS,
             first=60,
+            job_kwargs={"coalesce": True, "max_instances": 1},
+        )
+    if (
+        config.PARARIUS_ALERT_MONITOR_ENABLED
+        and config.PARARIUS_ALERT_MONITOR_INTERVAL_SECONDS
+    ):
+        app.job_queue.run_repeating(
+            pararius_alert_watchdog,
+            interval=config.PARARIUS_ALERT_MONITOR_INTERVAL_SECONDS,
+            first=75,
             job_kwargs={"coalesce": True, "max_instances": 1},
         )
 
@@ -525,6 +541,173 @@ async def roofz_preapplication_watchdog(context: ContextTypes.DEFAULT_TYPE) -> N
                 )
 
 
+async def pararius_alert_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not config.PARARIUS_ALERT_MONITOR_ENABLED:
+        return
+
+    try:
+        alerts = await find_new_pararius_plus_alert_emails()
+    except Exception as exc:
+        logger.warning("Pararius+ alert mailbox check failed: %s", exc)
+        await db.log_event(
+            "pararius_plus_alert_check_failed",
+            level="warning",
+            source=ParariusScraper.SOURCE,
+            status="error",
+            detail=str(exc),
+        )
+        return
+
+    if not alerts:
+        return
+
+    users = [
+        user
+        for user in await _get_active_allowed_users()
+        if ParariusScraper.SOURCE in normalize_sources(user.get("enabled_sources"))
+    ]
+    reply_settings = ParariusReplySettings.from_config()
+    reply_settings_error = reply_settings.ready_error()
+    reply_attempts_by_chat: dict[int, int] = {}
+
+    for alert in alerts:
+        await db.log_event(
+            "pararius_plus_alert_detected",
+            source=ParariusScraper.SOURCE,
+            listing_id=alert.message_id,
+            title=alert.subject,
+            status="detected",
+            data={
+                "sender": alert.sender,
+                "listing_count": len(alert.listings),
+                "created_at": alert.created_at.isoformat() if alert.created_at else None,
+            },
+        )
+        notified_users = 0
+        processed_listings = 0
+        for listing in alert.listings:
+            for user in users:
+                chat_id = int(user["chat_id"])
+                if not _listing_matches_user_filters(listing, user):
+                    await db.log_event(
+                        "pararius_plus_alert_filtered",
+                        chat_id=chat_id,
+                        source=listing.source,
+                        listing_id=listing.id,
+                        title=listing.title,
+                        status="filtered",
+                        data={
+                            "price_eur": listing.price_eur,
+                            "bedrooms": listing.bedrooms,
+                            "size_m2_value": listing.size_m2_value,
+                            "max_price": user.get("max_price"),
+                            "min_bedrooms": user.get("min_bedrooms"),
+                            "min_size_m2": user.get("min_size_m2"),
+                        },
+                    )
+                    continue
+                if await db.was_sent(chat_id, listing.source, listing.id):
+                    continue
+
+                seen_listing = await db.mark_seen(
+                    listing.source,
+                    listing.id,
+                    listing.url,
+                    listing.title,
+                    listing.price,
+                )
+                first_seen_at = seen_listing.get("scraped_at") if seen_listing else None
+                reply_timing_start = listing.reply_data.get("available_at") or first_seen_at
+                await db.log_event(
+                    "listing_new",
+                    chat_id=chat_id,
+                    source=listing.source,
+                    listing_id=listing.id,
+                    title=listing.title,
+                    status="new",
+                    data={
+                        "price": listing.price,
+                        "url": listing.url,
+                        "mailbox_message_id": alert.message_id,
+                        "mailbox_source": "pararius_plus_alert",
+                        "first_seen_at": first_seen_at,
+                        "source_available_at": listing.reply_data.get("available_at"),
+                        "first_seen_by_bot": bool(seen_listing.get("inserted")) if seen_listing else False,
+                    },
+                )
+                await scanner_module._send_notification(context.bot, chat_id, listing)
+                await db.mark_sent(chat_id, listing.source, listing.id)
+                notified_users += 1
+                processed_listings += 1
+
+                if user.get("auto_reply_enabled"):
+                    attempts = reply_attempts_by_chat.get(chat_id, 0)
+                    attempted = await scanner_module._enqueue_auto_reply_to_listing(
+                        chat_id,
+                        listing,
+                        reply_settings,
+                        reply_settings_error,
+                        attempts,
+                        ParariusReplier,
+                        ParariusReplyResult,
+                        "Pararius",
+                        context.bot,
+                        reply_timing_start,
+                    )
+                    if attempted:
+                        reply_attempts_by_chat[chat_id] = attempts + 1
+                else:
+                    await db.log_event(
+                        "auto_reply_user_disabled",
+                        chat_id=chat_id,
+                        source=listing.source,
+                        listing_id=listing.id,
+                        title=listing.title,
+                        status="skipped",
+                    )
+
+        if not alert.listings and users:
+            text = (
+                "Pararius+ alert needs attention\n\n"
+                f"Subject: {alert.subject or '(no subject)'}\n"
+                "Problem: no Pararius listing link was detected in the forwarded email."
+            )
+            for user in users:
+                await context.bot.send_message(
+                    chat_id=user["chat_id"],
+                    text=text,
+                    disable_web_page_preview=True,
+                )
+                notified_users += 1
+
+        await db.log_event(
+            "pararius_plus_alert_processed",
+            source=ParariusScraper.SOURCE,
+            listing_id=alert.message_id,
+            title=alert.subject,
+            status="processed",
+            data={
+                "listing_count": len(alert.listings),
+                "processed_listings": processed_listings,
+                "notified_users": notified_users,
+                "active_pararius_users": len(users),
+            },
+        )
+        try:
+            await mark_pararius_plus_alert_email_seen(alert.message_id)
+        except Exception as exc:
+            logger.warning("Could not mark Pararius+ alert email seen: %s", exc)
+            await db.log_event(
+                "pararius_plus_alert_mark_seen_failed",
+                level="warning",
+                source=ParariusScraper.SOURCE,
+                listing_id=alert.message_id,
+                title=alert.subject,
+                status="error",
+                detail=str(exc),
+            )
+
+
 def _listing_from_auto_reply_row(row: dict) -> Listing:
     title = row.get("seen_title") or row.get("listing_id") or "Roofz listing"
     url = row.get("listing_url") or row.get("url") or ""
@@ -536,6 +719,19 @@ def _listing_from_auto_reply_row(row: dict) -> Listing:
         address="Amsterdam",
         url=url,
     )
+
+
+def _listing_matches_user_filters(listing: Listing, user_filters: dict) -> bool:
+    max_price = int(user_filters.get("max_price") or 0)
+    min_bedrooms = int(user_filters.get("min_bedrooms") or 0)
+    min_size_m2 = int(user_filters.get("min_size_m2") or 0)
+    if max_price and listing.price_eur and listing.price_eur > max_price:
+        return False
+    if min_bedrooms and listing.bedrooms is not None and listing.bedrooms < min_bedrooms:
+        return False
+    if min_size_m2 and listing.size_m2_value and listing.size_m2_value < min_size_m2:
+        return False
+    return True
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

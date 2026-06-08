@@ -44,13 +44,9 @@ export default {
   async email(message, env, ctx) {
     const raw = await new Response(message.raw).text();
     const record = buildEmailRecord(message, raw);
-    record.forward = {
-      to: env.FORWARD_TO || "",
-      status: env.FORWARD_TO ? "pending" : "not_configured",
-      updatedAt: record.createdAt,
-    };
+    record.forward = buildForwardRecord(record, env);
     await saveMessage(env, record);
-    if (env.FORWARD_TO) {
+    if (record.forward.status === "pending") {
       try {
         await message.forward(env.FORWARD_TO);
         record.forward.status = "sent";
@@ -63,6 +59,39 @@ export default {
     }
   },
 };
+
+function buildForwardRecord(record, env) {
+  const forwardTo = env.FORWARD_TO || "";
+  const forward = {
+    to: forwardTo,
+    status: forwardTo ? "pending" : "not_configured",
+    updatedAt: record.createdAt,
+  };
+  if (forwardTo && shouldSkipForward(record, env)) {
+    forward.status = "skipped";
+    forward.reason = "pararius_plus_alert";
+  }
+  return forward;
+}
+
+export function shouldSkipForward(record, env = {}) {
+  if (String(env.FORWARD_SKIP_PARARIUS_PLUS || "1").trim() === "0") {
+    return false;
+  }
+  return containsParariusPlus(record);
+}
+
+export function containsParariusPlus(record) {
+  const haystack = [
+    record && record.subject,
+    record && record.raw,
+    record && record.text,
+    ...(Array.isArray(record && record.html) ? record.html : []),
+  ]
+    .filter((value) => typeof value === "string")
+    .join("\n");
+  return /pararius\s*(?:\+|=2b|&#43;|&plus;)/i.test(haystack);
+}
 
 async function listMessages(env, url) {
   const limit = clampLimit(url.searchParams.get("limit"));

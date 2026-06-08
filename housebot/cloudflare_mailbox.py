@@ -117,6 +117,9 @@ def _normalize_summary(message: dict) -> dict:
         "from": {"address": sender_address or message.get("sender", "") or ""},
         "seen": bool(message.get("seen")),
         "createdAt": message.get("createdAt") or message.get("created_at") or "",
+        "links": [link for link in message.get("links", []) if isinstance(link, str)]
+        if isinstance(message.get("links"), list)
+        else [],
         "forward": message.get("forward") if isinstance(message.get("forward"), dict) else None,
     }
 

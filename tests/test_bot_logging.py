@@ -8,6 +8,7 @@ os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 from telegram.error import NetworkError
 
 from housebot import bot
+from housebot.scrapers.base import Listing
 
 
 class BotLoggingTests(unittest.IsolatedAsyncioTestCase):
@@ -149,6 +150,65 @@ class BotLoggingTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         mark_seen.assert_awaited_once_with("message-1")
+
+    async def test_pararius_plus_alert_sends_notification_and_marks_seen(self):
+        listing = Listing(
+            id="26928668",
+            source="pararius",
+            title="Flat Kraanspoor 3 P 3 in Amsterdam",
+            price="€1,220 pcm",
+            address="Amsterdam",
+            url="https://www.pararius.com/apartment-for-rent/amsterdam/26928668/kraanspoor",
+            price_eur=1220,
+            bedrooms=1,
+            size_m2_value=46,
+            reply_data={"available_at": "2026-06-08T00:00:00+00:00"},
+        )
+        alert = SimpleNamespace(
+            message_id="mail-1",
+            subject="Pararius+ alert",
+            sender="service@pararius.com",
+            created_at=None,
+            listings=(listing,),
+        )
+        user = {
+            "chat_id": 123,
+            "enabled_sources": '["pararius"]',
+            "max_price": 1500,
+            "min_bedrooms": 1,
+            "min_size_m2": 25,
+            "auto_reply_enabled": False,
+        }
+        log_event = AsyncMock()
+        context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+
+        with (
+            patch.object(bot.config, "PARARIUS_ALERT_MONITOR_ENABLED", True),
+            patch.object(bot, "find_new_pararius_plus_alert_emails", AsyncMock(return_value=[alert])),
+            patch.object(bot, "mark_pararius_plus_alert_email_seen", AsyncMock()) as mark_seen,
+            patch.object(bot, "_get_active_allowed_users", AsyncMock(return_value=[user])),
+            patch.object(bot.db, "was_sent", AsyncMock(return_value=False)),
+            patch.object(
+                bot.db,
+                "mark_seen",
+                AsyncMock(return_value={"scraped_at": "2026-06-08 12:00:00", "inserted": True}),
+            ),
+            patch.object(bot.db, "mark_sent", AsyncMock()),
+            patch.object(bot.db, "log_event", log_event),
+            patch.object(bot.scanner_module, "_send_notification", AsyncMock()) as send_notification,
+        ):
+            await bot.pararius_alert_watchdog(context)
+
+        send_notification.assert_awaited_once()
+        mark_seen.assert_awaited_once_with("mail-1")
+        self.assertTrue(
+            any(
+                call.args
+                and call.args[0] == "pararius_plus_alert_processed"
+                and call.kwargs["data"]["notified_users"] == 1
+                for call in log_event.await_args_list
+            )
+        )
 
 
 if __name__ == "__main__":
