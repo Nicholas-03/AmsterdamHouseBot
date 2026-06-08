@@ -5,11 +5,14 @@ from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("TELEGRAM_TOKEN", "test-token")
 
+from housebot import pararius_replier
 from housebot.pararius_replier import (
     ParariusReplier,
+    ParariusReplyResult,
     ParariusReplySettings,
     _build_contact_payload,
     _extract_contact_url,
+    _is_challenge,
     _parse_contact_form,
 )
 from housebot.scrapers.base import Listing
@@ -73,6 +76,14 @@ class ParariusReplySettingsTests(unittest.TestCase):
 
 
 class ParariusContactFormTests(unittest.TestCase):
+    def test_detects_dutch_cloudflare_challenge(self):
+        self.assertTrue(
+            _is_challenge(
+                "Beveiliging wordt geverifieerd. Deze website gebruikt een beveiligingsservice. "
+                "Ray ID: abc123"
+            )
+        )
+
     def test_extract_contact_url_from_listing_detail(self):
         html = """
         <a class="button" href="/contact/74f0f129-ff40-53a0-bd34-f33efac5f629">
@@ -185,6 +196,39 @@ class ParariusReplierTests(unittest.IsolatedAsyncioTestCase):
                 result = await replier.reply_to_listing(_listing())
 
         self.assertEqual(result.status, "missing_contact_data")
+
+    async def test_curl_submit_rotates_fingerprints_after_blocked_result(self):
+        attempts = []
+
+        class FakeCurlSession:
+            def __init__(self, impersonate):
+                self.impersonate = impersonate
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        async with ParariusReplier(_settings(dry_run=False)) as replier:
+            async def fake_submit(session, listing, contact_url):
+                attempts.append(session.impersonate)
+                if session.impersonate == "safari18_0":
+                    return ParariusReplyResult("blocked", "Cloudflare")
+                return ParariusReplyResult("sent", "ok")
+
+            with (
+                patch.object(pararius_replier, "CurlAsyncSession", FakeCurlSession),
+                patch.object(pararius_replier, "_PARARIUS_CURL_IMPERSONATIONS", ("safari18_0", "safari17_0")),
+                patch.object(replier, "_submit_with_session", fake_submit),
+            ):
+                result = await replier._submit_with_curl_fingerprints(
+                    _listing(),
+                    "https://www.pararius.nl/contact/example",
+                )
+
+        self.assertEqual(result.status, "sent")
+        self.assertEqual(attempts, ["safari18_0", "safari17_0"])
 
 
 if __name__ == "__main__":

@@ -39,9 +39,20 @@ _DEFAULT_HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     ),
 }
+_PARARIUS_CURL_IMPERSONATIONS = (
+    "safari18_0",
+    "safari17_0",
+    "safari15_5",
+    "chrome133a",
+    "chrome124",
+)
 _CONTACT_HREF_RE = re.compile(r"^/contact/[0-9a-f-]{8,}$", re.I)
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f-]{27,}$", re.I)
-_CHALLENGE_RE = re.compile(r"(just a moment|enable javascript and cookies|__cf_chl|cf-challenge)", re.I)
+_CHALLENGE_RE = re.compile(
+    r"(just a moment|enable javascript and cookies|__cf_chl|cf-challenge|"
+    r"beveiliging wordt geverifieerd|beveiligingsservice|controleert of u geen bot bent|ray id:)",
+    re.I,
+)
 _LOGIN_PAGE_RE = re.compile(r"\b(inloggen|log in|login)\b", re.I)
 _SUCCESS_RE = re.compile(
     r"(reactie is verzonden|bericht is verzonden|message has been sent|response has been sent|successfully sent|bedankt)",
@@ -206,9 +217,7 @@ class ParariusReplier:
     async def _submit_contact_request(self, listing: Listing, contact_url: str) -> ParariusReplyResult:
         try:
             if _USE_CURL and CurlAsyncSession is not None:
-                async with CurlAsyncSession(impersonate="chrome124") as session:
-                    _load_storage_state_cookies(session, self.settings.storage_state_path)
-                    return await self._submit_with_session(session, listing, contact_url)
+                return await self._submit_with_curl_fingerprints(listing, contact_url)
 
             async with httpx.AsyncClient(timeout=self.settings.timeout_seconds, follow_redirects=True) as session:
                 return await self._submit_with_httpx_session(session, listing, contact_url)
@@ -218,6 +227,28 @@ class ParariusReplier:
         except Exception as exc:
             logger.exception("Pararius reply failed for %s", listing.url)
             return ParariusReplyResult("error", str(exc))
+
+    async def _submit_with_curl_fingerprints(self, listing: Listing, contact_url: str) -> ParariusReplyResult:
+        if CurlAsyncSession is None:
+            return ParariusReplyResult("error", "curl_cffi is not available.")
+
+        last_result: ParariusReplyResult | None = None
+        for attempt, impersonate in enumerate(_PARARIUS_CURL_IMPERSONATIONS):
+            async with CurlAsyncSession(impersonate=impersonate) as session:
+                _load_storage_state_cookies(session, self.settings.storage_state_path)
+                result = await self._submit_with_session(session, listing, contact_url)
+            if result.status not in {"blocked", "login_required"}:
+                if attempt:
+                    logger.info(
+                        "Pararius reply recovered with %s fingerprint after %d failed attempt(s).",
+                        impersonate,
+                        attempt,
+                    )
+                return result
+            last_result = result
+            logger.debug("Pararius reply failed with %s fingerprint: %s", impersonate, result.detail)
+
+        return last_result or ParariusReplyResult("error", "No Pararius HTTP fingerprint produced a result.")
 
     async def _submit_with_session(self, session, listing: Listing, contact_url: str) -> ParariusReplyResult:
         response = await session.get(contact_url, headers=_DEFAULT_HEADERS, timeout=self.settings.timeout_seconds)
