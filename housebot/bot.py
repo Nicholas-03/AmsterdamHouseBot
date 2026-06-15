@@ -640,7 +640,7 @@ async def pararius_alert_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None:
                 notified_users += 1
                 processed_listings += 1
 
-                if user.get("auto_reply_enabled"):
+                if ParariusScraper.SOURCE in _resolve_auto_reply_sources(user):
                     attempts = reply_attempts_by_chat.get(chat_id, 0)
                     attempted = await scanner_module._enqueue_auto_reply_to_listing(
                         chat_id,
@@ -862,40 +862,92 @@ async def cmd_autoreply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("Set your filters first with /search.")
         return
 
-    arg = context.args[0].casefold() if context.args else "status"
+    args = context.args or []
+    arg = args[0].casefold() if args else "status"
+    source_args = args[1:]
+
     if arg in {"status", "show"}:
         await update.message.reply_text(_format_auto_reply_status(user_filters))
         return
 
     if arg in {"off", "disable", "disabled", "stop"}:
-        await db.set_auto_reply(chat_id, False)
-        await db.log_event("auto_reply_toggle_changed", chat_id=chat_id, status="off")
-        await update.message.reply_text(
-            "Auto-reply is off. I will still send matching listings in Telegram."
-        )
+        if source_args:
+            sources_to_disable, invalid = parse_source_tokens(source_args)
+            if invalid or not sources_to_disable:
+                await update.message.reply_text(_autoreply_usage(invalid or None))
+                return
+            current = _resolve_auto_reply_sources(user_filters)
+            new_sources = tuple(s for s in current if s not in set(sources_to_disable))
+            if not new_sources:
+                await db.set_auto_reply_settings(chat_id, False, None)
+                await db.log_event("auto_reply_toggle_changed", chat_id=chat_id, status="off")
+                await update.message.reply_text(
+                    "Auto-reply is off. I will still send matching listings in Telegram."
+                )
+            else:
+                compact = _compact_auto_reply_sources(new_sources)
+                await db.set_auto_reply_settings(chat_id, True, compact)
+                await db.log_event(
+                    "auto_reply_sources_changed",
+                    chat_id=chat_id,
+                    status="updated",
+                    data={"auto_reply_sources": list(new_sources)},
+                )
+                updated = await db.get_filters(chat_id)
+                await update.message.reply_text(
+                    "Auto-reply updated.\n\n" + _format_auto_reply_status(updated)
+                )
+        else:
+            await db.set_auto_reply_settings(chat_id, False, None)
+            await db.log_event("auto_reply_toggle_changed", chat_id=chat_id, status="off")
+            await update.message.reply_text(
+                "Auto-reply is off. I will still send matching listings in Telegram."
+            )
         return
 
     if arg in {"on", "enable", "enabled", "start"}:
-        status = _auto_reply_source_status()
-        if not any(item[1] is None for item in status):
-            await update.message.reply_text(
-                "Auto-reply cannot be enabled yet.\n"
-                "Server setup issues:\n"
-                + "\n".join(f"{label}: {error}" for label, error in status)
+        if source_args:
+            sources_to_enable, invalid = parse_source_tokens(source_args)
+            if invalid or not sources_to_enable:
+                await update.message.reply_text(_autoreply_usage(invalid or None))
+                return
+            current = _resolve_auto_reply_sources(user_filters)
+            new_sources = tuple(
+                s for s in ALL_SOURCES
+                if s in set(current) or s in set(sources_to_enable)
             )
-            return
-
-        await db.set_auto_reply(chat_id, True)
-        await db.log_event("auto_reply_toggle_changed", chat_id=chat_id, status="on")
-        await update.message.reply_text(
-            "Auto-reply is on for sources that are ready on the server.\n"
-            + "\n".join(_format_source_status(label, error) for label, error in status)
-            + "\n"
-            "Use /autoreply off to disable it."
-        )
+            compact = _compact_auto_reply_sources(new_sources)
+            await db.set_auto_reply_settings(chat_id, True, compact)
+            await db.log_event(
+                "auto_reply_sources_changed",
+                chat_id=chat_id,
+                status="updated",
+                data={"auto_reply_sources": list(new_sources)},
+            )
+            updated = await db.get_filters(chat_id)
+            await update.message.reply_text(
+                "Auto-reply updated.\n\n" + _format_auto_reply_status(updated)
+            )
+        else:
+            source_status = _auto_reply_source_status()
+            if not any(item[1] is None for item in source_status):
+                await update.message.reply_text(
+                    "Auto-reply cannot be enabled yet.\n"
+                    "Server setup issues:\n"
+                    + "\n".join(f"{label}: {error}" for label, error in source_status)
+                )
+                return
+            await db.set_auto_reply_settings(chat_id, True, None)
+            await db.log_event("auto_reply_toggle_changed", chat_id=chat_id, status="on")
+            await update.message.reply_text(
+                "Auto-reply is on for all sites that are ready.\n"
+                + "\n".join(_format_source_status(label, error) for label, error in source_status)
+                + "\n"
+                "Use /autoreply off to disable, or /autoreply off <site> to disable a specific site."
+            )
         return
 
-    await update.message.reply_text("Use /autoreply on, /autoreply off, or /autoreply status.")
+    await update.message.reply_text(_autoreply_usage())
 
 
 async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1296,7 +1348,7 @@ async def _send_help(update: Update) -> None:
         "/search - set Kamernet property types, rent, bedrooms, and size filters\n"
         "/filters - show active filters\n"
         "/sources on|off|only|all|status - control which sites send notifications\n"
-        "/autoreply on|off|status - control Pararius/Kamernet/Funda/Roofz auto-replies\n"
+        "/autoreply on|off|on <site>|off <site>|status - control auto-replies per site\n"
         "/logs - show recent operational events\n"
         "/test - scan now\n"
         "/pause - pause notifications\n"
@@ -1326,7 +1378,14 @@ async def _build_status_text(user_filters: dict | None) -> str:
             + ("Active" if user_filters.get("active") and not user_filters.get("setup_in_progress") else "Paused/setup")
         )
         lines.append(f"Sites: {format_sources(user_filters.get('enabled_sources'))}")
-        lines.append(f"Auto-reply: {'On' if user_filters.get('auto_reply_enabled') else 'Off'}")
+        enabled_ar = _resolve_auto_reply_sources(user_filters)
+        if not enabled_ar:
+            ar_text = "Off"
+        elif set(enabled_ar) >= set(ALL_SOURCES):
+            ar_text = "On (all sites)"
+        else:
+            ar_text = "On (" + format_sources(enabled_ar) + ")"
+        lines.append(f"Auto-reply: {ar_text}")
     else:
         lines.append("Filters: not configured. Use /search.")
 
@@ -1387,7 +1446,13 @@ def _format_filters(user_filters: dict) -> str:
     kamernet_property_type = format_kamernet_property_types(
         user_filters.get("kamernet_property_type", DEFAULT_KAMERNET_PROPERTY_TYPE),
     )
-    auto_reply_text = "On" if user_filters.get("auto_reply_enabled") else "Off"
+    enabled_ar_sources = _resolve_auto_reply_sources(user_filters)
+    if not enabled_ar_sources:
+        auto_reply_text = "Off"
+    elif set(enabled_ar_sources) >= set(ALL_SOURCES):
+        auto_reply_text = "On (all sites)"
+    else:
+        auto_reply_text = "On (" + format_sources(enabled_ar_sources) + ")"
     notification_sources = format_sources(user_filters.get("enabled_sources"))
     status_text = "Setup in progress"
     if not user_filters.get("setup_in_progress"):
@@ -1445,17 +1510,53 @@ def _format_interval(seconds: int) -> str:
     return f"{seconds} second{'s' if seconds != 1 else ''}"
 
 
+def _resolve_auto_reply_sources(user_filters: dict) -> tuple[str, ...]:
+    """Expands the per-source setting to a concrete tuple of enabled sources."""
+    if not user_filters.get("auto_reply_enabled"):
+        return ()
+    sources = user_filters.get("auto_reply_sources")
+    if sources is None:
+        return ALL_SOURCES
+    return sources
+
+
+def _compact_auto_reply_sources(sources: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Returns None when sources == ALL_SOURCES (compact representation for DB)."""
+    if set(sources) >= set(ALL_SOURCES):
+        return None
+    return tuple(s for s in ALL_SOURCES if s in set(sources))
+
+
 def _format_auto_reply_status(user_filters: dict) -> str:
-    status_text = "On" if user_filters.get("auto_reply_enabled") else "Off"
-    source_status = "\n".join(
-        _format_source_status(label, error)
-        for label, error in _auto_reply_source_status()
+    enabled_sources = _resolve_auto_reply_sources(user_filters)
+    server_status = {label: error for label, error in _auto_reply_source_status()}
+    lines = ["Auto-reply per site:"]
+    for source in ALL_SOURCES:
+        label = SOURCE_LABELS.get(source, source.capitalize())
+        user_on = source in enabled_sources
+        server_error = server_status.get(label)
+        if user_on:
+            state = "on" if server_error is None else f"on (not ready: {server_error})"
+        else:
+            state = "off"
+        lines.append(f"- {label}: {state}")
+    lines.append("")
+    lines.append(
+        "Use /autoreply on|off to toggle all sites, "
+        "or /autoreply on <site>|off <site> for a specific site."
     )
+    return "\n".join(lines)
+
+
+def _autoreply_usage(invalid: list[str] | None = None) -> str:
+    prefix = ""
+    if invalid:
+        prefix = "Unknown site: " + ", ".join(invalid) + "\n\n"
     return (
-        "Auto-reply status:\n"
-        f"Toggle: {status_text}\n"
-        f"{source_status}\n\n"
-        "Use /autoreply on or /autoreply off."
+        prefix
+        + "Use /autoreply status, /autoreply on, /autoreply off, "
+        "/autoreply on <site>, or /autoreply off <site>.\n"
+        f"Sites: {format_sources(ALL_SOURCES)}."
     )
 
 

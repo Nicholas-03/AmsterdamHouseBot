@@ -47,8 +47,18 @@ _FILTER_MATCH_KEYS = (
     "min_size_m2",
     "kamernet_property_type",
     "auto_reply_enabled",
+    "auto_reply_sources",
     "enabled_sources",
 )
+
+
+def _auto_reply_enabled_for_source(user_filters: dict, source: str) -> bool:
+    if not user_filters.get("auto_reply_enabled"):
+        return False
+    sources = user_filters.get("auto_reply_sources")
+    if sources is None:
+        return True
+    return source in sources
 
 
 async def run_scan_for_user(
@@ -280,7 +290,7 @@ async def run_scan_for_user(
                 )
                 await _send_notification(bot, chat_id, listing)
                 await db.mark_sent(chat_id, listing.source, listing.id)
-                if user_filters.get("auto_reply_enabled"):
+                if _auto_reply_enabled_for_source(user_filters, listing.source):
                     if listing.source == ParariusScraper.SOURCE:
                         attempted = await _enqueue_auto_reply_to_listing(
                             chat_id,

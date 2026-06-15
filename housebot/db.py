@@ -131,6 +131,7 @@ async def init_db():
         await _ensure_column(db, "auto_replies", "reply_latency_seconds", "REAL")
         await _ensure_column(db, "auto_replies", "confirmation_at", "TIMESTAMP")
         await _ensure_column(db, "auto_replies", "confirmation_latency_seconds", "REAL")
+        await _ensure_column(db, "user_filters", "auto_reply_sources", "TEXT DEFAULT NULL")
         if await _has_column(db, "user_filters", "kamernet_auto_reply"):
             await db.execute("""
                 UPDATE user_filters
@@ -259,6 +260,7 @@ async def get_filters(chat_id: int) -> dict | None:
                 "min_size_m2": row["min_size_m2"] or 0,
                 "kamernet_property_type": serialize_kamernet_property_types(row["kamernet_property_type"]),
                 "auto_reply_enabled": bool(row["auto_reply_enabled"]),
+                "auto_reply_sources": _parse_auto_reply_sources_json(row["auto_reply_sources"]),
                 "enabled_sources": normalize_sources(row["enabled_sources"]),
                 "active": bool(row["active"]),
                 "setup_in_progress": bool(row["setup_in_progress"]),
@@ -609,6 +611,27 @@ async def set_auto_reply(chat_id: int, enabled: bool) -> None:
         await db.commit()
 
 
+async def set_auto_reply_settings(
+    chat_id: int,
+    enabled: bool,
+    sources: tuple[str, ...] | None,
+) -> None:
+    sources_json = json.dumps(list(sources)) if sources is not None else None
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO user_filters (chat_id, auto_reply_enabled, auto_reply_sources)
+            VALUES (?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                auto_reply_enabled=excluded.auto_reply_enabled,
+                auto_reply_sources=excluded.auto_reply_sources,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (chat_id, int(enabled), sources_json),
+        )
+        await db.commit()
+
+
 async def set_enabled_sources(chat_id: int, enabled_sources) -> None:
     normalized_sources = normalize_sources(enabled_sources)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -652,12 +675,26 @@ async def get_all_active_users() -> list[dict]:
                     "min_size_m2": row["min_size_m2"] or 0,
                     "kamernet_property_type": serialize_kamernet_property_types(row["kamernet_property_type"]),
                     "auto_reply_enabled": bool(row["auto_reply_enabled"]),
+                    "auto_reply_sources": _parse_auto_reply_sources_json(row["auto_reply_sources"]),
                     "enabled_sources": normalize_sources(row["enabled_sources"]),
                     "active": bool(row["active"]),
                     "setup_in_progress": bool(row["setup_in_progress"]),
                 }
                 for row in rows
             ]
+
+
+def _parse_auto_reply_sources_json(value) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    try:
+        loaded = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(loaded, list):
+        return None
+    sources = tuple(s for s in loaded if s)
+    return sources if sources else None
 
 
 async def get_kamernet_reply(listing_id: str) -> dict | None:
